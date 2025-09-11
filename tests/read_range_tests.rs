@@ -193,3 +193,38 @@ fn test_indexed_selection_reads_expected_ranges() {
     let out3 = h.read_range(250, 260).unwrap();
     assert_eq!(out3, b"BBB");
 }
+
+#[test]
+fn test_range_outside_returns_empty() {
+    let td = TempDir::new().unwrap();
+    let root = td.path().to_path_buf();
+    let (h, part_dir, chunks_dir) = setup_partition(&root);
+
+    let manifest = paths::partition_manifest(&part_dir);
+    let chunk_id = Uuid::now_v7();
+    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_ts_ms: 100, max_ts_ms: Some(200) });
+    write_chunk(&chunks_dir, chunk_id, b"XYZ");
+
+    let out1 = h.read_range(0, 50).unwrap();
+    assert!(out1.is_empty());
+    let out2 = h.read_range(300, 400).unwrap();
+    assert!(out2.is_empty());
+}
+
+#[test]
+fn test_cross_chunk_reads_concatenate() {
+    let td = TempDir::new().unwrap();
+    let root = td.path().to_path_buf();
+    let (h, part_dir, chunks_dir) = setup_partition(&root);
+
+    let manifest = paths::partition_manifest(&part_dir);
+    let c1 = Uuid::now_v7();
+    let c2 = Uuid::now_v7();
+    write_manifest_line(&manifest, &ManifestLine { chunk_id: c1, min_ts_ms: 0, max_ts_ms: Some(49) });
+    write_manifest_line(&manifest, &ManifestLine { chunk_id: c2, min_ts_ms: 50, max_ts_ms: Some(99) });
+    write_chunk(&chunks_dir, c1, b"AAAA");
+    write_chunk(&chunks_dir, c2, b"BBBB");
+
+    let out = h.read_range(-100, 200).unwrap();
+    assert_eq!(out, b"AAAABBBB");
+}
