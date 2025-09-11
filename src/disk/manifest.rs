@@ -4,9 +4,9 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ManifestLine {
     pub chunk_id: Uuid,
-    pub min_ts_ms: i64,
+    pub min_order_key: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_ts_ms: Option<i64>,
+    pub max_order_key: Option<u64>,
 }
 
 // Load the partition manifest (JSONL) into memory.
@@ -39,7 +39,7 @@ pub fn close_manifest_line(path: &std::path::Path, rt: &crate::partition::Partit
         .filter(|l| !l.trim().is_empty())
         .map(|s| s.to_string())
         .collect();
-    let closed = ManifestLine { chunk_id: rt.cur_chunk_id.expect("chunk id"), min_ts_ms: rt.cur_chunk_min_ts_ms, max_ts_ms: Some(rt.cur_chunk_max_ts_ms) };
+    let closed = ManifestLine { chunk_id: rt.cur_chunk_id.expect("chunk id"), min_order_key: rt.cur_chunk_min_order_key, max_order_key: Some(rt.cur_chunk_max_order_key) };
     let closed_json = serde_json::to_string(&closed)?;
     if lines.is_empty() {
         lines.push(closed_json);

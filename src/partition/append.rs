@@ -1,4 +1,4 @@
-use uuid::{Uuid, Timestamp, NoContext};
+use uuid::Uuid;
 
 use crate::disk::manifest::{ManifestLine, append_manifest_line, close_manifest_line};
 use crate::errors::{Result, TvError};
@@ -6,24 +6,24 @@ use crate::partition::PartitionHandle;
 use crate::store::paths;
 use crate::disk::chunk;
 
-pub fn append(h: &PartitionHandle, ts_ms: i64, payload: &[u8]) -> Result<crate::partition::AppendAck> {
+pub fn append(h: &PartitionHandle, order_key: u64, payload: &[u8]) -> Result<crate::partition::AppendAck> {
     if h.inner.read_only { return Err(TvError::ReadOnly); }
     let part_dir = paths::partition_dir(h.root(), h.id());
     let chunks_dir = paths::chunks_dir(&part_dir);
 
     let offset = {
         let mut rt = h.inner.runtime.write();
-        ensure_ordering(&rt, ts_ms)?;
-        maybe_roll(h, &part_dir, &mut rt, ts_ms, payload.len() as u64)?;
+        ensure_ordering(&rt, order_key)?;
+        maybe_roll(h, &part_dir, &mut rt, order_key, payload.len() as u64)?;
         let chunk_id = rt.cur_chunk_id.expect("chunk id set by maybe_roll/start_new_chunk");
         let off = append_to_chunk(&chunks_dir, chunk_id, &payload)?; // payload is opaque, it is the responsibility of the caller to validate it
         // Index block bookkeeping
-        start_block_if_needed(&mut rt, ts_ms, off);
-        extend_block(&mut rt, ts_ms, payload.len() as u64);
-        if should_flush_block(&rt, &h.inner.cfg.read(), ts_ms) {
+        start_block_if_needed(&mut rt, order_key, off);
+        extend_block(&mut rt, order_key, payload.len() as u64);
+        if should_flush_block(&rt, &h.inner.cfg.read(), order_key) {
             flush_block(&chunks_dir, chunk_id, &mut rt)?;
         }
-        update_runtime_after_append(&mut rt, ts_ms, &payload);
+        update_runtime_after_append(&mut rt, order_key, &payload);
         off
     };
 
@@ -38,25 +38,25 @@ pub fn set_config(h: &PartitionHandle, delta: crate::partition::PartitionConfigD
 }
 
 
-fn ensure_ordering(rt: &crate::partition::PartitionRuntime, ts_ms: i64) -> Result<()> {
-    if rt.cur_chunk_id.is_some() && ts_ms < rt.cur_chunk_max_ts_ms {
-        return Err(TvError::OutOfOrder { ts_ms, last: rt.cur_chunk_max_ts_ms });
+fn ensure_ordering(rt: &crate::partition::PartitionRuntime, order_key: u64) -> Result<()> {
+    if rt.cur_chunk_id.is_some() && order_key < rt.cur_chunk_max_order_key {
+        return Err(TvError::OutOfOrder { ts_ms: order_key as i64, last: rt.cur_chunk_max_order_key as i64 });
     }
     Ok(())
 }
 
-fn maybe_roll(h: &PartitionHandle, part_dir: &std::path::Path, rt: &mut crate::partition::PartitionRuntime, ts_ms: i64, next_len: u64) -> Result<()> {
+fn maybe_roll(h: &PartitionHandle, part_dir: &std::path::Path, rt: &mut crate::partition::PartitionRuntime, order_key: u64, next_len: u64) -> Result<()> {
     let cfg = h.inner.cfg.read().clone();
     let manifest_path = paths::partition_manifest(part_dir);
     if rt.cur_chunk_id.is_none() {
-        start_new_chunk(&manifest_path, rt, ts_ms)?;
-    } else if should_roll(rt, &cfg, ts_ms, next_len) {
+        start_new_chunk(&manifest_path, rt, order_key)?;
+    } else if should_roll(rt, &cfg, order_key, next_len) {
         // flush pending index block before closing chunk
         if rt.cur_index_block_record_count > 0 {
             if let Some(chunk_id) = rt.cur_chunk_id { flush_block(&paths::chunks_dir(part_dir), chunk_id, rt)?; }
         }
         finalize_current_chunk(&manifest_path, rt)?;
-        start_new_chunk(&manifest_path, rt, ts_ms)?;
+        start_new_chunk(&manifest_path, rt, order_key)?;
         h.inner.stats.lock().current_chunk_size = 0;
     }
     Ok(())
@@ -68,33 +68,35 @@ fn append_to_chunk(chunks_dir: &std::path::Path, chunk_id: Uuid, line: &[u8]) ->
     chunk::append_all(&mut f, line)
 }
 
-fn update_runtime_after_append(rt: &mut crate::partition::PartitionRuntime, ts_ms: i64, line: &[u8]) {
-    rt.cur_chunk_max_ts_ms = rt.cur_chunk_max_ts_ms.max(ts_ms);
+fn update_runtime_after_append(rt: &mut crate::partition::PartitionRuntime, order_key: u64, line: &[u8]) {
+    rt.cur_chunk_max_order_key = rt.cur_chunk_max_order_key.max(order_key);
     rt.cur_chunk_size_bytes += line.len() as u64;
     rt.cur_last_record_bytes = Some(line.to_vec());
 }
 
-fn start_block_if_needed(rt: &mut crate::partition::PartitionRuntime, ts_ms: i64, start_off: u64) {
+fn start_block_if_needed(rt: &mut crate::partition::PartitionRuntime, order_key: u64, start_off: u64) {
     if rt.cur_index_block_record_count == 0 {
-        rt.cur_index_block_min_ts_ms = ts_ms;
-        rt.cur_index_block_max_ts_ms = ts_ms;
+        rt.cur_index_block_min_order_key = order_key;
+        rt.cur_index_block_max_order_key = order_key;
         rt.cur_index_block_start_off = start_off;
         rt.cur_index_block_len_bytes = 0;
         rt.cur_index_block_record_count = 0;
     }
 }
 
-fn extend_block(rt: &mut crate::partition::PartitionRuntime, ts_ms: i64, len: u64) {
-    rt.cur_index_block_max_ts_ms = rt.cur_index_block_max_ts_ms.max(ts_ms);
+fn extend_block(rt: &mut crate::partition::PartitionRuntime, order_key: u64, len: u64) {
+    rt.cur_index_block_max_order_key = rt.cur_index_block_max_order_key.max(order_key);
     rt.cur_index_block_len_bytes += len;
     rt.cur_index_block_record_count += 1;
 }
 
-fn should_flush_block(rt: &crate::partition::PartitionRuntime, cfg: &crate::config::PartitionConfig, ts_ms: i64) -> bool {
+fn should_flush_block(rt: &crate::partition::PartitionRuntime, cfg: &crate::config::PartitionConfig, order_key: u64) -> bool {
     if rt.cur_index_block_record_count == 0 { return false; }
     let by_recs = cfg.index.max_records > 0 && (rt.cur_index_block_record_count as u32) >= cfg.index.max_records;
-    let max_ms = cfg.index.max_hours.saturating_mul(3_600_000);
-    let by_time = max_ms > 0 && (ts_ms - rt.cur_index_block_min_ts_ms) as i64 >= max_ms as i64;
+    let by_time = if cfg.key_is_timestamp {
+        let max_ms = cfg.index.max_hours.saturating_mul(3_600_000);
+        max_ms > 0 && (order_key.saturating_sub(rt.cur_index_block_min_order_key)) >= max_ms
+    } else { false };
     by_recs || by_time
 }
 
@@ -102,10 +104,8 @@ fn flush_block(chunks_dir: &std::path::Path, chunk_id: Uuid, rt: &mut crate::par
     if rt.cur_index_block_record_count == 0 { return Ok(()); }
     let index_path = paths::index_file(chunks_dir, chunk_id);
     let line = crate::disk::index::IndexLine {
-        block_min_ms: rt.cur_index_block_min_ts_ms,
-        block_min_iso: ts_to_iso(rt.cur_index_block_min_ts_ms),
-        block_max_ms: rt.cur_index_block_max_ts_ms,
-        block_max_iso: ts_to_iso(rt.cur_index_block_max_ts_ms),
+        block_min_key: rt.cur_index_block_min_order_key,
+        block_max_key: rt.cur_index_block_max_order_key,
         file_offset_bytes: rt.cur_index_block_start_off,
         block_len_bytes: rt.cur_index_block_len_bytes,
     };
@@ -113,8 +113,8 @@ fn flush_block(chunks_dir: &std::path::Path, chunk_id: Uuid, rt: &mut crate::par
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(index_path)?;
     let mut buf = serde_json::to_vec(&line)?; buf.push(b'\n'); f.write_all(&buf)?; f.sync_all()?;
     // reset current block
-    rt.cur_index_block_min_ts_ms = 0;
-    rt.cur_index_block_max_ts_ms = 0;
+    rt.cur_index_block_min_order_key = 0;
+    rt.cur_index_block_max_order_key = 0;
     rt.cur_index_block_start_off = 0;
     rt.cur_index_block_len_bytes = 0;
     rt.cur_index_block_record_count = 0;
@@ -126,49 +126,39 @@ fn update_stats(h: &PartitionHandle, bytes: u64) {
     s.appends += 1; s.bytes += bytes; s.current_chunk_size += bytes;
 }
 
-fn should_roll(rt: &crate::partition::PartitionRuntime, cfg: &crate::config::PartitionConfig, ts_ms: i64, next_len: u64) -> bool {
+fn should_roll(rt: &crate::partition::PartitionRuntime, cfg: &crate::config::PartitionConfig, order_key: u64, next_len: u64) -> bool {
     if rt.cur_chunk_id.is_none() { return false; }
     let by_size = cfg.chunk_roll.max_bytes > 0 && rt.cur_chunk_size_bytes + next_len > cfg.chunk_roll.max_bytes;
-    let max_ms = cfg.chunk_roll.max_hours.saturating_mul(3_600_000);
-    let by_time = max_ms > 0 && (ts_ms - rt.cur_chunk_min_ts_ms) as i64 >= max_ms as i64;
+    let by_time = if cfg.key_is_timestamp {
+        let max_ms = cfg.chunk_roll.max_hours.saturating_mul(3_600_000);
+        max_ms > 0 && (order_key.saturating_sub(rt.cur_chunk_min_order_key)) >= max_ms
+    } else { false };
     by_size || by_time
 }
 
 fn finalize_current_chunk(manifest_path: &std::path::Path, rt: &crate::partition::PartitionRuntime) -> Result<()> {
     if rt.cur_chunk_id.is_none() { return Ok(()); }
-    // Close the last open manifest entry by rewriting the last line to include max_ts_ms
+    // Close the last open manifest entry by rewriting the last line to include max_order_key
     close_manifest_line(manifest_path, rt)
 }
 
-fn start_new_chunk(manifest_path: &std::path::Path, rt: &mut crate::partition::PartitionRuntime, ts_ms: i64) -> Result<()> {
-    let secs = (ts_ms / 1000) as u64;
-    let nanos = ((ts_ms % 1000) * 1_000_000) as u32;
-    let ts = Timestamp::from_unix(NoContext, secs, nanos);
-    let new_id = Uuid::new_v7(ts);
-    // Write an open manifest line for the new chunk (no max_ts_ms)
-    append_manifest_line(manifest_path, ManifestLine { chunk_id: new_id, min_ts_ms: ts_ms, max_ts_ms: None })?;
+fn start_new_chunk(manifest_path: &std::path::Path, rt: &mut crate::partition::PartitionRuntime, order_key: u64) -> Result<()> {
+    let new_id = Uuid::now_v7();
+    // Write an open manifest line for the new chunk (no max_order_key)
+    append_manifest_line(manifest_path, ManifestLine { chunk_id: new_id, min_order_key: order_key, max_order_key: None })?;
     // Create an empty index file alongside the new chunk using partition runtime
     crate::disk::index::create_empty_index_file(rt, new_id)?;
 
     rt.cur_chunk_id = Some(new_id);
-    rt.cur_chunk_min_ts_ms = ts_ms;
-    rt.cur_chunk_max_ts_ms = ts_ms;
+    rt.cur_chunk_min_order_key = order_key;
+    rt.cur_chunk_max_order_key = order_key;
     rt.cur_chunk_size_bytes = 0;
-    rt.cur_index_block_min_ts_ms = 0;
-    rt.cur_index_block_max_ts_ms = 0;
+    rt.cur_index_block_min_order_key = 0;
+    rt.cur_index_block_max_order_key = 0;
     rt.cur_index_block_start_off = 0;
     rt.cur_index_block_len_bytes = 0;
     rt.cur_index_block_record_count = 0;
     Ok(())
-}
-
-fn ts_to_iso(ts_ms: i64) -> String {
-    use chrono::{Utc, SecondsFormat, TimeZone};
-    if let Some(dt) = Utc.timestamp_millis_opt(ts_ms).single() {
-        dt.to_rfc3339_opts(SecondsFormat::Millis, true)
-    } else {
-        chrono::DateTime::<Utc>::from_timestamp(0, 0).unwrap().to_rfc3339_opts(SecondsFormat::Millis, true)
-    }
 }
 
 

@@ -22,9 +22,9 @@ fn load_partition_runtime_data_inner(root: &std::path::Path, id: Uuid, plugin: &
     let Some(last) = lines.last().cloned() else { return Ok(cache); };
 
     cache.cur_chunk_id = Some(last.chunk_id);
-    cache.cur_chunk_min_ts_ms = last.min_ts_ms;
+    cache.cur_chunk_min_order_key = last.min_order_key;
     // Do not infer max from min; will determine from chunk content/index
-    cache.cur_chunk_max_ts_ms = last.max_ts_ms.unwrap_or(i64::MIN);
+    cache.cur_chunk_max_order_key = last.max_order_key.unwrap_or(0);
 
     let chunks_dir = paths::chunks_dir(&part_dir);
     let chunk_path = paths::chunk_file(&chunks_dir, last.chunk_id);
@@ -39,19 +39,19 @@ fn load_partition_runtime_data_inner(root: &std::path::Path, id: Uuid, plugin: &
     recover_tail_with_plugin_from_offset(&chunk_path, start_off, &mut cache, last_index.is_none(), plugin)?;
 
     // If open chunk (no max in manifest) but we recovered a later max from last record, set it.
-    // Determine last_chunk_max_ts_ms strictly from last chunk content/index
+    // Determine last_chunk_max strictly from last chunk content/index
     let determined_max = if last_index.is_some() {
-        Some(cache.cur_index_block_max_ts_ms)
+        Some(cache.cur_index_block_max_order_key)
     } else if cache.cur_index_block_record_count > 0 {
-        Some(cache.cur_index_block_max_ts_ms)
+        Some(cache.cur_index_block_max_order_key)
     } else {
         None
     };
 
-    if let Some(max_ts) = determined_max {
-        cache.cur_chunk_max_ts_ms = max_ts;
+    if let Some(max_key) = determined_max {
+        cache.cur_chunk_max_order_key = max_key;
     } else {
-        return Err(crate::errors::TvError::Io(std::io::Error::new(std::io::ErrorKind::Other, "failed to determine cur_chunk_max_ts_ms from last chunk")));
+        return Err(crate::errors::TvError::Io(std::io::Error::new(std::io::ErrorKind::Other, "failed to determine cur_chunk_max_order_key from last chunk")));
     }
 
     Ok(cache)
@@ -62,8 +62,8 @@ fn load_last_index_and_start(index_path: &std::path::Path, cache: &mut Partition
     let f = File::open(index_path)?;
     let mut idx = load_index_lines(&f)?;
     if let Some(ix) = idx.pop() {
-        cache.cur_index_block_min_ts_ms = ix.block_min_ms;
-        cache.cur_index_block_max_ts_ms = ix.block_max_ms;
+        cache.cur_index_block_min_order_key = ix.block_min_key;
+        cache.cur_index_block_max_order_key = ix.block_max_key;
         cache.cur_index_block_size_bytes = ix.block_len_bytes;
         let start_off = ix.file_offset_bytes + ix.block_len_bytes;
         return Ok((Some(ix), start_off));
@@ -78,16 +78,17 @@ fn recover_tail_with_plugin_from_offset(chunk_path: &std::path::Path, start_off:
     // Position scanner to the start offset and align to a record boundary if needed.
     scanner.seek_to(start_off)?;
 
-    let mut last_ts = None;
-    let mut first_ts_in_scan = None;
+    let mut last_key: Option<u64> = None;
+    let mut first_key_in_scan: Option<u64> = None;
     let mut last_meta: Option<(u64, u32)> = None;
     let mut rec_count: u64 = 0;
     let mut total_bytes: u64 = 0;
 
     // Read from positioned offset to EOF
     while let Some(m) = scanner.next()? {
-        if first_ts_in_scan.is_none() { first_ts_in_scan = Some(m.ts_ms); }
-        last_ts = Some(m.ts_ms);
+        let key = m.ts_ms as u64; // map plugin ts to order_key
+        if first_key_in_scan.is_none() { first_key_in_scan = Some(key); }
+        last_key = Some(key);
         last_meta = Some((m.offset, m.len));
         rec_count += 1;
         total_bytes += m.len as u64;
@@ -96,12 +97,12 @@ fn recover_tail_with_plugin_from_offset(chunk_path: &std::path::Path, start_off:
     if rec_count > 0 {
         // If there was no index, initialize min from first scanned record.
         if no_index {
-            if let Some(min_ts) = first_ts_in_scan { cache.cur_index_block_min_ts_ms = min_ts; }
-            if let Some(max_ts) = last_ts { cache.cur_index_block_max_ts_ms = max_ts; }
+            if let Some(min_k) = first_key_in_scan { cache.cur_index_block_min_order_key = min_k; }
+            if let Some(max_k) = last_key { cache.cur_index_block_max_order_key = max_k; }
             cache.cur_index_block_size_bytes = total_bytes;
         } else {
             // Extend indexed block
-            if let Some(max_ts) = last_ts { cache.cur_index_block_max_ts_ms = max_ts; }
+            if let Some(max_k) = last_key { cache.cur_index_block_max_order_key = max_k; }
             cache.cur_index_block_size_bytes = cache.cur_index_block_size_bytes + total_bytes;
         }
         cache.cur_index_block_record_count = rec_count;
@@ -111,7 +112,7 @@ fn recover_tail_with_plugin_from_offset(chunk_path: &std::path::Path, start_off:
             let bytes = read_record_bytes(&mut f2, off, len)?;
             cache.cur_last_record_bytes = Some(bytes);
         }
-        if let Some(ts) = last_ts { cache.cur_chunk_max_ts_ms = cache.cur_chunk_max_ts_ms.max(ts); }
+        if let Some(k) = last_key { cache.cur_chunk_max_order_key = cache.cur_chunk_max_order_key.max(k); }
     }
     Ok(())
 }

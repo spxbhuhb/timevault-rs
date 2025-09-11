@@ -6,10 +6,8 @@ use crate::errors::Result;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IndexLine {
-    pub block_min_ms: i64,
-    pub block_min_iso: String,
-    pub block_max_ms: i64,
-    pub block_max_iso: String,
+    pub block_min_key: u64,
+    pub block_max_key: u64,
     pub file_offset_bytes: u64,
     pub block_len_bytes: u64,
 }

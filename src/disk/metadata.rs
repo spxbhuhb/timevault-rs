@@ -9,6 +9,7 @@ pub struct MetadataJson {
     pub chunk_roll: super::super::config::ChunkRollCfg,
     pub index: super::super::config::IndexCfg,
     pub retention: super::super::config::RetentionCfg,
+    pub key_is_timestamp: bool,
 }
 
 pub fn load_metadata(path: &std::path::Path) -> crate::errors::Result<MetadataJson> {

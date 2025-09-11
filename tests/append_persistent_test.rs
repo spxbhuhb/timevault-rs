@@ -58,7 +58,7 @@ fn append_persistent_outputs_under_target_test() {
     let chunks_dir = paths::chunks_dir(&part_dir);
     let mut any_index = false;
     for l in &lines {
-        if l.max_ts_ms.is_some() {
+        if l.max_order_key.is_some() {
             let ip = paths::index_file(&chunks_dir, l.chunk_id);
             if ip.exists() { any_index = true; break; }
         }
@@ -77,6 +77,7 @@ fn write_metadata_with_roll(part_dir: &std::path::Path, id: Uuid, max_bytes: u64
         chunk_roll: ChunkRollCfg { max_bytes, max_hours },
         index: IndexCfg::default(),
         retention: RetentionCfg::default(),
+        key_is_timestamp: true,
     };
     let p = paths::partition_metadata(part_dir);
     std::fs::write(p, serde_json::to_vec(&m).unwrap()).unwrap();

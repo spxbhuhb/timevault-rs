@@ -57,7 +57,7 @@ fn stress_parallel_append_and_read() {
                     let ts = (idx as i64) * 1_000_000 + i as i64;
                     let payload = serde_json::json!({"a": i, "b": idx});
                     let line = plugin.encode(ts, &payload).unwrap();
-                    h.append(ts, &line).unwrap();
+                    h.append(ts as u64, &line).unwrap();
                 }
             });
         }
@@ -67,7 +67,7 @@ fn stress_parallel_append_and_read() {
                 for i in 0..100 {
                     let start = (i * 10_000) as i64;
                     let end = start + 5_000;
-                    let _ = h.read_range(start, end);
+                    let _ = h.read_range(start as u64, end as u64);
                 }
             });
         }

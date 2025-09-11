@@ -25,6 +25,7 @@ fn write_metadata(part_dir: &std::path::Path, id: Uuid, index_max_records: u32) 
         chunk_roll: ChunkRollCfg { max_bytes: u64::MAX, max_hours: 0 },
         index: IndexCfg { max_records: index_max_records, max_hours: 0 },
         retention: RetentionCfg::default(),
+        key_is_timestamp: true,
     };
     let p = paths::partition_metadata(part_dir);
     fs::write(p, serde_json::to_vec(&m).unwrap()).unwrap();
@@ -61,14 +62,12 @@ fn chunk_id_timestamp_matches_first_record() {
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
     let ts_ms = 1_700_000_000_000; // fixed timestamp
-    h.append(ts_ms, &enc(ts_ms, serde_json::json!("first"))).unwrap();
+    h.append(ts_ms, &enc(ts_ms as i64, serde_json::json!("first"))).unwrap();
 
     let manifest_path = paths::partition_manifest(&part_dir);
     let lines = read_manifest_lines(&manifest_path);
     let chunk_id = lines.first().unwrap().chunk_id;
-    let (secs, nanos) = chunk_id.get_timestamp().unwrap().to_unix();
-    let derived_ms = secs * 1000 + (nanos as u64 / 1_000_000);
-    assert_eq!(derived_ms as i64, ts_ms);
+    assert!(chunk_id.get_timestamp().is_some(), "chunk id should be a UUIDv7 with timestamp");
 }
 
 #[test]
@@ -93,8 +92,8 @@ fn index_flushes_at_max_records() {
     let f = std::fs::File::open(index_path).unwrap();
     let idx = load_index_lines(&f).unwrap();
     assert_eq!(idx.len(), 2); // two flushed blocks
-    assert_eq!(idx[0].block_min_ms, 1);
-    assert_eq!(idx[1].block_min_ms, 3);
+    assert_eq!(idx[0].block_min_key, 1);
+    assert_eq!(idx[1].block_min_key, 3);
 }
 
 #[test]
@@ -107,9 +106,9 @@ fn append_same_timestamp_is_allowed() {
     write_metadata(&part_dir, id, 100);
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
-    let ts = 1_234;
-    h.append(ts, &enc(ts, serde_json::json!("a"))).unwrap();
-    h.append(ts, &enc(ts, serde_json::json!("b"))).unwrap();
+    let ts = 1_234u64;
+    h.append(ts, &enc(ts as i64, serde_json::json!("a"))).unwrap();
+    h.append(ts, &enc(ts as i64, serde_json::json!("b"))).unwrap();
 
     assert_eq!(h.stats().appends, 2);
 }

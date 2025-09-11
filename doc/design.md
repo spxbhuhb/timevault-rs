@@ -2,8 +2,7 @@
 
 ## 0. Purpose & Scope
 
-An embedded Rust library for persistently storing timestamped records (events, IoT measurements, alarms, etc.) in
-files, grouped by partitions (UUIDs). Optimized for high-throughput appends, inexpensive sequential reads by time range.
+An embedded Rust library for persistently storing records keyed by an increasing u64 order key (typically a timestamp). Files are grouped by partitions (UUIDs). Optimized for high-throughput appends and inexpensive sequential reads by order-key range.
 
 - In-scope: on-disk layout, directory structure, file formats, IDs, append semantics, indexing, retention, observability.
 - Out-of-scope (provided elsewhere): Write-ahead logging (WAL), consensus/replication, and crash recovery are handled
@@ -22,13 +21,13 @@ Maximum record size is configurable (default: 1 MB).
 ## 1. Terminology & Data Model
 
 - Partition: Logical stream of records identified by a UUID (partition id is exactly the UUID you provide).
-- Record: Opaque bytes and timestamp (required). Library does not interpret the payload.
+- Record: Opaque bytes and an order_key: u64 (required). The library does not interpret the payload.
 - Format plugin: User-supplied logic to parse, validate, compress, uncompress etc. a record.
-- Chunk: Append-only file containing time-ordered records for a partition. Identified by UUIDv7.
-- Index (per-chunk): Sparse mapping from timestamp ranges to byte ranges in its chunk to accelerate seeks.
+- Chunk: Append-only file containing order-key-ordered records for a partition. Identified by UUIDv7.
+- Index (per-chunk): Sparse mapping from order_key ranges to byte ranges in its chunk to accelerate seeks.
 - Metadata: Per-partition static info and rolling state (format versions, knobs).
-- Manifest: Per-partition list of live chunks (ordered by time), their IDs, min/max timestamps, and file paths.
-- Timestamps: i64 milliseconds since Unix epoch.
+- Manifest: Per-partition list of live chunks (ordered by order_key), their IDs, min/max order_key, and file paths.
+- Order key: u64 monotonically non-decreasing per partition. If `key_is_timestamp=true`, interpret as milliseconds since Unix epoch.
 
 ## 2. On-Disk Layout
 
@@ -57,9 +56,8 @@ Maximum record size is configurable (default: 1 MB).
 
 ### 2.2 File Naming
 
-- Chunk ID: 
-  - UUIDv7 (time-ordered, simplifies ops & debugging).
-  - The timestamp in the UUID is the timestamp of the first record in the chunk (minted from record timestamp).
+- Chunk ID:
+  - UUIDv7 (time-ordered creation time, simplifies ops & debugging)
 - Filenames:
   - Chunk: <chunk-uuidv7>.chunk
   - Index: <chunk-uuidv7>.index
@@ -81,23 +79,21 @@ The manifest provides information about the chunk files, the library uses inform
 
 ### 3.2 Index file (*.index) - Per Chunk
 
-Sparse index entries to enable timestamp → offset seeks.
+Sparse index entries to enable order_key → offset seeks.
 
 - File format is JSONL where each line represents one block (the example below is broken into multiple lines for clarity).
-- The server loads the entire index into memory and uses binary search to find the block containing the timestamp.
+- The server loads the entire index into memory and uses binary search to find the block containing the order key.
 
 ```json
 {
-  "block_min_ms": 1609459200000,
-  "block_min_iso": "2021-01-01T00:00:00.000Z",
-  "block_max_ms": 1609545600000,
-  "block_max_iso": "2021-01-02T00:00:00.000Z",
+  "block_min_key": 1609459200000,
+  "block_max_key": 1609545600000,
   "file_offset_bytes": 1234,
   "block_len_bytes": 5678
 }
 ```
 
-- Index cadence: one entry every `index.max_records` or when `Δt` ≥ `index.max_hours` (both configurable).
+- Index cadence: one entry every `index.max_records` or when `Δt` ≥ `index.max_hours` (only if `key_is_timestamp=true`).
 - Rebuild: possible from the chunk if index is missing/corrupt (uses format plugin).
 
 ### 3.3 Partition Metadata (metadata.json)
@@ -111,7 +107,8 @@ Stable per-partition info and knobs (human-friendly JSON, durations are in appro
   "format_plugin": "my-format-plugin",
   "chunk_roll": { "max_bytes": 256000000, "max_hours": 100 },
   "index": { "max_records": 1440, "max_hours": 24 },
-  "retention": { "max_days": 365 }
+  "retention": { "max_days": 365 },
+  "key_is_timestamp": true
 }
 ```
 
@@ -121,15 +118,14 @@ Ordered list of live chunks for range routing ("chunks" may contain more entries
 
 File format is JSONL where each line represents one chunk (the examples below is broken into multiple lines for clarity).
 
-For rolled chunks the manifest contains `max_ts_ms` and `max_ts` fields. For open chunks it does not.
+For rolled chunks the manifest contains `max_order_key`. For open chunks it does not.
 
 Open chunk manifest entry:
 
 ```json
 { 
   "chunk_id": "<uuidv7>", 
-  "min_ts_ms": 1609459200000,
-  "min_ts": "2021-01-01T00:00:00.000Z"
+  "min_order_key": 1609459200000
 }
 ```
 
@@ -138,10 +134,8 @@ Rolled chunk manifest entry:
 ```json
 { 
   "chunk_id": "<uuidv7>", 
-  "min_ts_ms": 1609459200000,
-  "min_ts": "2021-01-01T00:00:00.000Z",
-  "max_ts_ms": 1609545600000,
-  "max_ts": "2021-01-02T00:00:00.000Z"
+  "min_order_key": 1609459200000,
+  "max_order_key": 1609545600000
 }
 ```
 
@@ -216,16 +210,23 @@ For each partition, the library maintains in-memory runtime data (`partition.run
 This is used to route reads and avoids reading the manifest for every read.
 
 ```rust
-struct PartitionRuntime {
-    last_chunk_id: Option<Uuid>,
-    last_chunk_min_ts_ms: i64,
-    last_chunk_max_ts_ms: i64,
-    last_chunk_size_bytes: u64,
-    last_index_block_min_ts_ms: i64,
-    last_index_block_max_ts_ms: i64,
-    last_index_block_record_count: u64,
-    last_index_block_size_bytes: u64,
-    last_record_bytes: Option<Vec<u8>>
+pub struct PartitionRuntime {
+  // Partition context
+  pub cur_partition_root: PathBuf,
+  pub cur_partition_id: Uuid,
+  // Current chunk state
+  pub cur_chunk_id: Option<Uuid>,
+  pub cur_chunk_min_order_key: u64,
+  pub cur_chunk_max_order_key: u64,
+  pub cur_chunk_size_bytes: u64,
+  // Current index block builder / tail recovery state
+  pub cur_index_block_min_order_key: u64,
+  pub cur_index_block_max_order_key: u64,
+  pub cur_index_block_record_count: u64,
+  pub cur_index_block_size_bytes: u64,
+  pub cur_index_block_start_off: u64,
+  pub cur_index_block_len_bytes: u64,
+  pub cur_last_record_bytes: Option<Vec<u8>>,
 }
 ```
 

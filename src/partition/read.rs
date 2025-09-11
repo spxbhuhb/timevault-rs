@@ -7,8 +7,8 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use uuid::Uuid;
 
-pub fn read_range(h: &PartitionHandle, from_ms: i64, to_ms: i64) -> Result<Vec<u8>> {
-    if from_ms > to_ms { return Err(TvError::InvalidRange { from: from_ms, to: to_ms }); }
+pub fn read_range(h: &PartitionHandle, from_key: u64, to_key: u64) -> Result<Vec<u8>> {
+    if from_key > to_key { return Err(TvError::InvalidRange { from: from_key as i64, to: to_key as i64 }); }
     let part_dir = paths::partition_dir(h.root(), h.id());
     let chunks_dir = paths::chunks_dir(&part_dir);
     let manifest_path = paths::partition_manifest(&part_dir);
@@ -16,33 +16,33 @@ pub fn read_range(h: &PartitionHandle, from_ms: i64, to_ms: i64) -> Result<Vec<u
 
     let manifest = load_manifest(&manifest_path)?;
     let mut out = Vec::new();
-    for m in select_chunks(&manifest, from_ms, to_ms) {
+    for m in select_chunks(&manifest, from_key, to_key) {
         let chunk_path = paths::chunk_file(&chunks_dir, m.chunk_id);
         if !chunk_path.exists() { return Err(TvError::MissingFile { path: chunk_path }); }
-        if is_fully_covered(&m, from_ms, to_ms) {
+        if is_fully_covered(&m, from_key, to_key) {
             append_entire_file(&chunk_path, &mut out)?;
             continue;
         }
-        append_indexed_ranges(&chunks_dir, m.chunk_id, from_ms, to_ms, &mut out)?;
+        append_indexed_ranges(&chunks_dir, m.chunk_id, from_key, to_key, &mut out)?;
     }
     Ok(out)
 }
 
 
-fn select_chunks(manifest: &[ManifestLine], from_ms: i64, to_ms: i64) -> Vec<ManifestLine> {
+fn select_chunks(manifest: &[ManifestLine], from_key: u64, to_key: u64) -> Vec<ManifestLine> {
     let mut out = Vec::new();
     for m in manifest {
-        if let Some(max) = m.max_ts_ms {
-            if m.min_ts_ms <= to_ms && max >= from_ms { out.push(m.clone()); }
+        if let Some(max) = m.max_order_key {
+            if m.min_order_key <= to_key && max >= from_key { out.push(m.clone()); }
         } else {
-            if m.min_ts_ms <= to_ms { out.push(m.clone()); }
+            if m.min_order_key <= to_key { out.push(m.clone()); }
         }
     }
     out
 }
 
-fn is_fully_covered(m: &ManifestLine, from_ms: i64, to_ms: i64) -> bool {
-    match m.max_ts_ms { Some(max) => m.min_ts_ms >= from_ms && max <= to_ms, None => false }
+fn is_fully_covered(m: &ManifestLine, from_key: u64, to_key: u64) -> bool {
+    match m.max_order_key { Some(max) => m.min_order_key >= from_key && max <= to_key, None => false }
 }
 
 fn append_entire_file(path: &std::path::Path, out: &mut Vec<u8>) -> Result<()> {
@@ -51,25 +51,25 @@ fn append_entire_file(path: &std::path::Path, out: &mut Vec<u8>) -> Result<()> {
     Ok(())
 }
 
-fn append_indexed_ranges(chunks_dir: &std::path::Path, chunk_id: Uuid, from_ms: i64, to_ms: i64, out: &mut Vec<u8>) -> Result<()> {
+fn append_indexed_ranges(chunks_dir: &std::path::Path, chunk_id: Uuid, from_key: u64, to_key: u64, out: &mut Vec<u8>) -> Result<()> {
     let chunk_path = paths::chunk_file(chunks_dir, chunk_id);
     let index_path = paths::index_file(chunks_dir, chunk_id);
     let mut f = File::open(&chunk_path).map_err(|_| TvError::MissingFile { path: chunk_path.clone() })?;
     let idx_f = File::open(&index_path).map_err(|_| TvError::MissingFile { path: index_path.clone() })?;
     let idx = load_index_lines(&idx_f)?;
-    let ranges = select_block_ranges(&idx, from_ms, to_ms);
+    let ranges = select_block_ranges(&idx, from_key, to_key);
     read_and_append_ranges(&mut f, &ranges, out)?;
     Ok(())
 }
 
-fn select_block_ranges(idx: &[IndexLine], from_ms: i64, to_ms: i64) -> Vec<(u64, u64)> {
+fn select_block_ranges(idx: &[IndexLine], from_key: u64, to_key: u64) -> Vec<(u64, u64)> {
     let mut ranges = Vec::new();
     let mut started = false;
     for b in idx {
         if !started {
-            if b.block_max_ms >= from_ms { started = true; ranges.push((b.file_offset_bytes, b.block_len_bytes)); }
+            if b.block_max_key >= from_key { started = true; ranges.push((b.file_offset_bytes, b.block_len_bytes)); }
         } else {
-            if b.block_min_ms > to_ms { break; }
+            if b.block_min_key > to_key { break; }
             ranges.push((b.file_offset_bytes, b.block_len_bytes));
         }
     }

@@ -23,12 +23,12 @@ pub struct PartitionRuntime {
     pub cur_partition_id: Uuid,
     // Current chunk state
     pub cur_chunk_id: Option<Uuid>,
-    pub cur_chunk_min_ts_ms: i64,
-    pub cur_chunk_max_ts_ms: i64,
+    pub cur_chunk_min_order_key: u64,
+    pub cur_chunk_max_order_key: u64,
     pub cur_chunk_size_bytes: u64,
     // Current index block builder / tail recovery state
-    pub cur_index_block_min_ts_ms: i64,
-    pub cur_index_block_max_ts_ms: i64,
+    pub cur_index_block_min_order_key: u64,
+    pub cur_index_block_max_order_key: u64,
     pub cur_index_block_record_count: u64,
     pub cur_index_block_size_bytes: u64,
     pub cur_index_block_start_off: u64,
@@ -66,6 +66,7 @@ impl PartitionHandle {
             chunk_roll: cfg.chunk_roll.clone(),
             index: cfg.index.clone(),
             retention: cfg.retention.clone(),
+            key_is_timestamp: cfg.key_is_timestamp,
         };
         let meta_path = crate::store::paths::partition_metadata(&part_dir);
         crate::disk::atomic::atomic_write_json(&meta_path, &meta)?;
@@ -96,7 +97,7 @@ impl PartitionHandle {
         let (m, cfg): (crate::disk::metadata::MetadataJson, PartitionConfig) = if meta_path.exists() {
             let m = crate::disk::metadata::load_metadata(&meta_path)?;
             // Optionally validate id match; ignore mismatch to keep minimal
-            let cfg = PartitionConfig { format_version: m.format_version, format_plugin: m.format_plugin.clone(), chunk_roll: m.chunk_roll.clone(), index: m.index.clone(), retention: m.retention.clone() };
+            let cfg = PartitionConfig { format_version: m.format_version, format_plugin: m.format_plugin.clone(), chunk_roll: m.chunk_roll.clone(), index: m.index.clone(), retention: m.retention.clone(), key_is_timestamp: m.key_is_timestamp };
             (m, cfg)
         } else {
             return Err(crate::errors::TvError::MissingFile { path: meta_path });
@@ -118,8 +119,8 @@ impl PartitionHandle {
         Ok(Self { inner: std::sync::Arc::new(inner) })
     }
 
-    pub fn append(&self, ts_ms: i64, payload: &[u8]) -> Result<AppendAck> { self::append::append(self, ts_ms, payload) }
-    pub fn read_range(&self, from_ms: i64, to_ms: i64) -> Result<Vec<u8>> { self::read::read_range(self, from_ms, to_ms) }
+    pub fn append(&self, order_key: u64, payload: &[u8]) -> Result<AppendAck> { self::append::append(self, order_key, payload) }
+    pub fn read_range(&self, from_key: u64, to_key: u64) -> Result<Vec<u8>> { self::read::read_range(self, from_key, to_key) }
     pub fn force_roll(&self) -> Result<()> { self::roll::force_roll(self) }
     pub fn stats(&self) -> PartitionStats { self.inner.stats.lock().clone() }
     pub fn set_config(&self, delta: PartitionConfigDelta) -> Result<()> { self::append::set_config(self, delta) }

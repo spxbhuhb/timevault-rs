@@ -29,6 +29,7 @@ fn write_metadata(part_dir: &PathBuf, id: Uuid) {
         chunk_roll: Default::default(),
         index: Default::default(),
         retention: Default::default(),
+        key_is_timestamp: true,
     };
     let p = paths::partition_metadata(part_dir);
     let s = serde_json::to_vec(&m).unwrap();
@@ -61,16 +62,9 @@ fn write_index(chunks_dir: &PathBuf, chunk_id: Uuid, lines: &[IndexLine]) -> Pat
 }
 
 fn idx_line(min_ms: i64, max_ms: i64, off: u64, len: u64) -> IndexLine {
-    use chrono::{Utc, SecondsFormat};
-    let to_iso = |ms: i64| {
-        let dt = chrono::DateTime::<Utc>::from_timestamp_millis(ms).unwrap();
-        dt.to_rfc3339_opts(SecondsFormat::Millis, true)
-    };
     IndexLine {
-        block_min_ms: min_ms,
-        block_min_iso: to_iso(min_ms),
-        block_max_ms: max_ms,
-        block_max_iso: to_iso(max_ms),
+        block_min_key: min_ms as u64,
+        block_max_key: max_ms as u64,
         file_offset_bytes: off,
         block_len_bytes: len,
     }
@@ -105,7 +99,7 @@ fn test_missing_chunk_returns_error() {
     let manifest = paths::partition_manifest(&part_dir);
     // manifest references a chunk id but no file created
     let chunk_id = Uuid::now_v7();
-    let m = ManifestLine { chunk_id, min_ts_ms: 100, max_ts_ms: Some(200) };
+    let m = ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(200) };
     write_manifest_line(&manifest, &m);
 
     let err = h.read_range(0, 300).unwrap_err();
@@ -123,7 +117,7 @@ fn test_missing_index_returns_error_for_partial_read() {
     let manifest = paths::partition_manifest(&part_dir);
     let chunk_id = Uuid::now_v7();
     // Rolled chunk [100, 300]
-    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_ts_ms: 100, max_ts_ms: Some(300) });
+    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(300) });
 
     // Create chunk data
     write_chunk(&chunks_dir, chunk_id, b"ABCDEFGH");
@@ -144,7 +138,7 @@ fn test_whole_chunk_fast_path_reads_entire_file() {
     let manifest = paths::partition_manifest(&part_dir);
     let chunk_id = Uuid::now_v7();
     // Rolled chunk fully inside range [100, 300]
-    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_ts_ms: 100, max_ts_ms: Some(300) });
+    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(300) });
 
     // Chunk content
     let data = b"0123456789";
@@ -163,7 +157,7 @@ fn test_indexed_selection_reads_expected_ranges() {
 
     let manifest = paths::partition_manifest(&part_dir);
     let chunk_id = Uuid::now_v7();
-    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_ts_ms: 100, max_ts_ms: Some(500) });
+    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(500) });
 
     // Build a chunk with 3 blocks: A(0..3), B(3..6), C(6..9)
     // Use bytes to simulate blocks at offsets with lengths
@@ -202,7 +196,7 @@ fn test_range_outside_returns_empty() {
 
     let manifest = paths::partition_manifest(&part_dir);
     let chunk_id = Uuid::now_v7();
-    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_ts_ms: 100, max_ts_ms: Some(200) });
+    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(200) });
     write_chunk(&chunks_dir, chunk_id, b"XYZ");
 
     let out1 = h.read_range(0, 50).unwrap();
@@ -220,11 +214,11 @@ fn test_cross_chunk_reads_concatenate() {
     let manifest = paths::partition_manifest(&part_dir);
     let c1 = Uuid::now_v7();
     let c2 = Uuid::now_v7();
-    write_manifest_line(&manifest, &ManifestLine { chunk_id: c1, min_ts_ms: 0, max_ts_ms: Some(49) });
-    write_manifest_line(&manifest, &ManifestLine { chunk_id: c2, min_ts_ms: 50, max_ts_ms: Some(99) });
+    write_manifest_line(&manifest, &ManifestLine { chunk_id: c1, min_order_key: 0, max_order_key: Some(49) });
+    write_manifest_line(&manifest, &ManifestLine { chunk_id: c2, min_order_key: 50, max_order_key: Some(99) });
     write_chunk(&chunks_dir, c1, b"AAAA");
     write_chunk(&chunks_dir, c2, b"BBBB");
 
-    let out = h.read_range(-100, 200).unwrap();
+    let out = h.read_range(0, 200).unwrap();
     assert_eq!(out, b"AAAABBBB");
 }

@@ -16,6 +16,7 @@ fn write_metadata_with_roll(part_dir: &std::path::Path, id: Uuid, max_bytes: u64
         chunk_roll: ChunkRollCfg { max_bytes, max_hours },
         index: IndexCfg::default(),
         retention: RetentionCfg::default(),
+        key_is_timestamp: true,
     };
     let p = paths::partition_metadata(part_dir);
     std::fs::write(p, serde_json::to_vec(&m).unwrap()).unwrap();
@@ -55,9 +56,9 @@ fn roll_by_size_writes_close_and_new_open() {
     let lines = read_manifest_lines(&manifest_path);
     assert!(lines.len() >= 2, "expected at least two manifest lines, got {}", lines.len());
     // There should be at least one closed (with max) and last open (None)
-    let any_closed = lines.iter().any(|l| l.max_ts_ms.is_some());
+    let any_closed = lines.iter().any(|l| l.max_order_key.is_some());
     assert!(any_closed, "expected at least one closed manifest entry");
-    assert!(lines.last().unwrap().max_ts_ms.is_none(), "last manifest line should be open");
+    assert!(lines.last().unwrap().max_order_key.is_none(), "last manifest line should be open");
 }
 
 #[test]
@@ -82,7 +83,7 @@ fn roll_by_time_after_threshold() {
     let manifest_path = paths::partition_manifest(&part_dir);
     let lines = read_manifest_lines(&manifest_path);
     assert!(lines.len() >= 2);
-    let any_closed = lines.iter().any(|l| l.max_ts_ms.is_some());
+    let any_closed = lines.iter().any(|l| l.max_order_key.is_some());
     assert!(any_closed, "expected at least one closed manifest entry");
-    assert!(lines.last().unwrap().max_ts_ms.is_none(), "last manifest line should be open");
+    assert!(lines.last().unwrap().max_order_key.is_none(), "last manifest line should be open");
 }
