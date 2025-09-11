@@ -96,3 +96,20 @@ fn index_flushes_at_max_records() {
     assert_eq!(idx[0].block_min_ms, 1);
     assert_eq!(idx[1].block_min_ms, 3);
 }
+
+#[test]
+fn append_same_timestamp_is_allowed() {
+    let td = TempDir::new().unwrap();
+    let root = td.path().to_path_buf();
+    let id = Uuid::now_v7();
+    let part_dir = paths::partition_dir(&root, id);
+    fs::create_dir_all(paths::chunks_dir(&part_dir)).unwrap();
+    write_metadata(&part_dir, id, 100);
+    let h = PartitionHandle::open(root.clone(), id).unwrap();
+
+    let ts = 1_234;
+    h.append(ts, &enc(ts, serde_json::json!("a"))).unwrap();
+    h.append(ts, &enc(ts, serde_json::json!("b"))).unwrap();
+
+    assert_eq!(h.stats().appends, 2);
+}

@@ -26,6 +26,7 @@ pub trait FormatPlugin: Send + Sync + 'static {
 }
 
 pub mod jsonl;
+pub mod jsonl_struct;
 
 use std::sync::Arc;
 use crate::errors::Result;
@@ -33,6 +34,7 @@ use crate::errors::Result;
 pub fn resolve_plugin(name: &str) -> Result<Arc<dyn FormatPlugin>> {
     match name {
         "jsonl" | "json" => Ok(Arc::new(jsonl::JsonlPlugin::default())),
+        "jsonl_struct" => Ok(Arc::new(jsonl_struct::JsonlStructPlugin::default())),
         other => Err(crate::errors::TvError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("unknown plugin: {}", other),
