@@ -60,6 +60,22 @@ fn write_index(chunks_dir: &PathBuf, chunk_id: Uuid, lines: &[IndexLine]) -> Pat
     p
 }
 
+fn idx_line(min_ms: i64, max_ms: i64, off: u64, len: u64) -> IndexLine {
+    use chrono::{NaiveDateTime, Utc, SecondsFormat, TimeZone};
+    let to_iso = |ms: i64| {
+        let ndt = NaiveDateTime::from_timestamp_millis(ms).unwrap();
+        Utc.from_utc_datetime(&ndt).to_rfc3339_opts(SecondsFormat::Millis, true)
+    };
+    IndexLine {
+        block_min_ms: min_ms,
+        block_min_iso: to_iso(min_ms),
+        block_max_ms: max_ms,
+        block_max_iso: to_iso(max_ms),
+        file_offset_bytes: off,
+        block_len_bytes: len,
+    }
+}
+
 #[test]
 fn test_invalid_range_returns_error() {
     let td = TempDir::new().unwrap();
@@ -159,9 +175,9 @@ fn test_indexed_selection_reads_expected_ranges() {
     write_chunk(&chunks_dir, chunk_id, &chunk_data);
 
     let idx = vec![
-        IndexLine { block_min_ms: 100, block_max_ms: 199, file_offset_bytes: 0, block_len_bytes: 3 },
-        IndexLine { block_min_ms: 200, block_max_ms: 299, file_offset_bytes: 3, block_len_bytes: 3 },
-        IndexLine { block_min_ms: 300, block_max_ms: 399, file_offset_bytes: 6, block_len_bytes: 3 },
+        idx_line(100, 199, 0, 3),
+        idx_line(200, 299, 3, 3),
+        idx_line(300, 399, 6, 3),
     ];
     write_index(&chunks_dir, chunk_id, &idx);
 

@@ -1,4 +1,4 @@
-use uuid::Uuid;
+use uuid::{Uuid, Timestamp, NoContext};
 
 use crate::disk::manifest::{ManifestLine, append_manifest_line, close_manifest_line};
 use crate::errors::{Result, TvError};
@@ -17,7 +17,7 @@ pub fn append(h: &PartitionHandle, ts_ms: i64, payload: &[u8]) -> Result<crate::
         let chunk_id = rt.cur_chunk_id.expect("chunk id set by maybe_roll/start_new_chunk");
         let off = append_to_chunk(&chunks_dir, chunk_id, &payload)?;
         // Index block bookkeeping
-        start_block_if_needed(&mut rt, ts_ms, off, payload.len() as u64);
+        start_block_if_needed(&mut rt, ts_ms, off);
         extend_block(&mut rt, ts_ms, payload.len() as u64);
         if should_flush_block(&rt, &h.inner.cfg.read(), ts_ms) {
             flush_block(&chunks_dir, chunk_id, &mut rt)?;
@@ -73,23 +73,20 @@ fn update_runtime_after_append(rt: &mut crate::partition::PartitionRuntime, ts_m
     rt.cur_last_record_bytes = Some(line.to_vec());
 }
 
-fn start_block_if_needed(rt: &mut crate::partition::PartitionRuntime, ts_ms: i64, start_off: u64, first_len: u64) {
+fn start_block_if_needed(rt: &mut crate::partition::PartitionRuntime, ts_ms: i64, start_off: u64) {
     if rt.cur_index_block_record_count == 0 {
         rt.cur_index_block_min_ts_ms = ts_ms;
         rt.cur_index_block_max_ts_ms = ts_ms;
         rt.cur_index_block_start_off = start_off;
-        rt.cur_index_block_len_bytes = first_len;
-        rt.cur_index_block_record_count = 1;
+        rt.cur_index_block_len_bytes = 0;
+        rt.cur_index_block_record_count = 0;
     }
 }
 
 fn extend_block(rt: &mut crate::partition::PartitionRuntime, ts_ms: i64, len: u64) {
-    if rt.cur_index_block_record_count > 0 {
-        rt.cur_index_block_max_ts_ms = rt.cur_index_block_max_ts_ms.max(ts_ms);
-        // When called for first record after start, caller already set first_len, so for subsequent records add len
-            if rt.cur_index_block_record_count > 1 { rt.cur_index_block_len_bytes += len; }
-        rt.cur_index_block_record_count += 1;
-    }
+    rt.cur_index_block_max_ts_ms = rt.cur_index_block_max_ts_ms.max(ts_ms);
+    rt.cur_index_block_len_bytes += len;
+    rt.cur_index_block_record_count += 1;
 }
 
 fn should_flush_block(rt: &crate::partition::PartitionRuntime, cfg: &crate::config::PartitionConfig, ts_ms: i64) -> bool {
@@ -105,7 +102,9 @@ fn flush_block(chunks_dir: &std::path::Path, chunk_id: Uuid, rt: &mut crate::par
     let index_path = paths::index_file(chunks_dir, chunk_id);
     let line = crate::disk::index::IndexLine {
         block_min_ms: rt.cur_index_block_min_ts_ms,
+        block_min_iso: ts_to_iso(rt.cur_index_block_min_ts_ms),
         block_max_ms: rt.cur_index_block_max_ts_ms,
+        block_max_iso: ts_to_iso(rt.cur_index_block_max_ts_ms),
         file_offset_bytes: rt.cur_index_block_start_off,
         block_len_bytes: rt.cur_index_block_len_bytes,
     };
@@ -141,7 +140,10 @@ fn finalize_current_chunk(manifest_path: &std::path::Path, rt: &crate::partition
 }
 
 fn start_new_chunk(manifest_path: &std::path::Path, rt: &mut crate::partition::PartitionRuntime, ts_ms: i64) -> Result<()> {
-    let new_id = Uuid::now_v7();
+    let secs = (ts_ms / 1000) as u64;
+    let nanos = ((ts_ms % 1000) * 1_000_000) as u32;
+    let ts = Timestamp::from_unix(NoContext, secs, nanos);
+    let new_id = Uuid::new_v7(ts);
     // Write an open manifest line for the new chunk (no max_ts_ms)
     append_manifest_line(manifest_path, ManifestLine { chunk_id: new_id, min_ts_ms: ts_ms, max_ts_ms: None })?;
     // Create an empty index file alongside the new chunk using partition runtime
@@ -157,6 +159,12 @@ fn start_new_chunk(manifest_path: &std::path::Path, rt: &mut crate::partition::P
     rt.cur_index_block_len_bytes = 0;
     rt.cur_index_block_record_count = 0;
     Ok(())
+}
+
+fn ts_to_iso(ts_ms: i64) -> String {
+    use chrono::{NaiveDateTime, Utc, SecondsFormat, TimeZone};
+    let ndt = NaiveDateTime::from_timestamp_millis(ts_ms).unwrap_or_else(|| NaiveDateTime::from_timestamp(0, 0));
+    Utc.from_utc_datetime(&ndt).to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 

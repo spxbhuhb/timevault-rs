@@ -58,6 +58,22 @@ fn write_index(chunks_dir: &PathBuf, chunk_id: Uuid, lines: &[IndexLine]) -> Pat
     p
 }
 
+fn idx_line(min_ms: i64, max_ms: i64, off: u64, len: u64) -> IndexLine {
+    use chrono::{NaiveDateTime, Utc, SecondsFormat, TimeZone};
+    let to_iso = |ms: i64| {
+        let ndt = NaiveDateTime::from_timestamp_millis(ms).unwrap();
+        Utc.from_utc_datetime(&ndt).to_rfc3339_opts(SecondsFormat::Millis, true)
+    };
+    IndexLine {
+        block_min_ms: min_ms,
+        block_min_iso: to_iso(min_ms),
+        block_max_ms: max_ms,
+        block_max_iso: to_iso(max_ms),
+        file_offset_bytes: off,
+        block_len_bytes: len,
+    }
+}
+
 #[test]
 fn recovery_no_manifest_returns_default() {
     let td = TempDir::new().unwrap();
@@ -131,7 +147,7 @@ fn recovery_with_index_extends_block_and_reads_last_record() {
 
     // Index covers first two records as one block
     let block_len = rec1.len() as u64 + rec2.len() as u64;
-    let idx = vec![IndexLine { block_min_ms: 100, block_max_ms: 200, file_offset_bytes: 0, block_len_bytes: block_len }];
+    let idx = vec![idx_line(100, 200, 0, block_len)];
     write_index(&chunks_dir, chunk_id, &idx);
 
     let cache = load_partition_runtime_data(&root, id).unwrap();
@@ -160,7 +176,7 @@ fn recovery_two_chunks_second_has_empty_index_initializes_runtime() {
     let mut data1 = Vec::new(); data1.extend_from_slice(rec1a); data1.extend_from_slice(rec1b);
     write_chunk(&chunks_dir, chunk1, &data1);
     // Index: one block covering both
-    let idx1 = vec![IndexLine { block_min_ms: 1000, block_max_ms: 1001, file_offset_bytes: 0, block_len_bytes: (rec1a.len()+rec1b.len()) as u64 }];
+    let idx1 = vec![idx_line(1000, 1001, 0, (rec1a.len()+rec1b.len()) as u64)];
     write_index(&chunks_dir, chunk1, &idx1);
     // Closed line
     write_manifest_line(&manifest, &ManifestLine { chunk_id: chunk1, min_ts_ms: 1000, max_ts_ms: Some(1001) });
@@ -215,7 +231,7 @@ fn recovery_seek_to_misaligned_offset_errors() {
     write_chunk(&chunks_dir, chunk_id, &chunk);
 
     // Corrupt index to point to a non-line-boundary start (offset 1 long block)
-    let idx = vec![IndexLine { block_min_ms: 100, block_max_ms: 100, file_offset_bytes: 0, block_len_bytes: 1 }];
+    let idx = vec![idx_line(100, 100, 0, 1)];
     write_index(&chunks_dir, chunk_id, &idx);
 
     let err = load_partition_runtime_data(&root, id).unwrap_err();
