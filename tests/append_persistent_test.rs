@@ -1,5 +1,4 @@
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -7,7 +6,7 @@ use timevault::store::paths;
 use timevault::PartitionHandle;
 use timevault::disk::manifest::ManifestLine;
 
-// This test intentionally keeps its outputs on disk under var/test so they can be
+// This test intentionally keeps its outputs on disk under target/test so they can be
 // manually inspected after `cargo test`. Other tests continue to use TempDir.
 fn enc(ts: i64, value: serde_json::Value) -> Vec<u8> {
     let rec = serde_json::json!({"timestamp": ts, "payload": value});
@@ -17,11 +16,22 @@ fn enc(ts: i64, value: serde_json::Value) -> Vec<u8> {
 }
 
 #[test]
-fn append_persistent_outputs_under_var_test() {
-    // Compute a stable location under the project root: ./var/test/<testname>-<uuid>
+fn append_persistent_outputs_under_target_test() {
+    // Compute a stable location under the project root: ./target/test/<testname>-<uuid>
     let project_root = project_root();
-    let tests_root = project_root.join("var").join("test");
+    let tests_root = project_root.join("target").join("test");
     fs::create_dir_all(&tests_root).unwrap();
+
+    // Clear previous runs' outputs for this test to avoid accumulation
+    if let Ok(entries) = fs::read_dir(&tests_root) {
+        for e in entries.flatten() {
+            if let Ok(name) = e.file_name().into_string() {
+                if name.starts_with("append_persistent_") {
+                    let _ = fs::remove_dir_all(e.path());
+                }
+            }
+        }
+    }
 
     let id = Uuid::now_v7();
     let test_dir = tests_root.join(format!("append_persistent_{}", id));
@@ -30,9 +40,9 @@ fn append_persistent_outputs_under_var_test() {
     // Prepare partition dir and metadata with small max_bytes to allow small chunks
     let part_dir = paths::partition_dir(&root, id);
     fs::create_dir_all(paths::chunks_dir(&part_dir)).unwrap();
-    write_metadata_with_roll(&part_dir, id, 64, 24); // tiny size cap
+    write_metadata_with_roll(&part_dir, id, 80, 24); // tiny size cap
 
-    // Open handle and append a few records. This should create files under var/test
+    // Open handle and append a few records. This should create files under target/test
     let h = PartitionHandle::open(root.clone(), id).unwrap();
     h.append(1_000, &enc(1_000, serde_json::json!("hello"))).unwrap();
     h.append(1_001, &enc(1_001, serde_json::json!("world"))).unwrap();
