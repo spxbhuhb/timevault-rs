@@ -64,9 +64,6 @@ fn append_persistent_outputs_under_target_test() {
         }
     }
     assert!(any_index, "expected at least one index file for a closed chunk");
-
-    // Print a helpful message for manual inspection (rust tests don't print by default unless failed or using --nocapture)
-    eprintln!("files written under {:?}", part_dir);
 }
 
 fn write_metadata_with_roll(part_dir: &std::path::Path, id: Uuid, max_bytes: u64, max_hours: u64) {

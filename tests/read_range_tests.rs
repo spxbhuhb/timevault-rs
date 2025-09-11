@@ -61,10 +61,10 @@ fn write_index(chunks_dir: &PathBuf, chunk_id: Uuid, lines: &[IndexLine]) -> Pat
 }
 
 fn idx_line(min_ms: i64, max_ms: i64, off: u64, len: u64) -> IndexLine {
-    use chrono::{NaiveDateTime, Utc, SecondsFormat, TimeZone};
+    use chrono::{Utc, SecondsFormat};
     let to_iso = |ms: i64| {
-        let ndt = NaiveDateTime::from_timestamp_millis(ms).unwrap();
-        Utc.from_utc_datetime(&ndt).to_rfc3339_opts(SecondsFormat::Millis, true)
+        let dt = chrono::DateTime::<Utc>::from_timestamp_millis(ms).unwrap();
+        dt.to_rfc3339_opts(SecondsFormat::Millis, true)
     };
     IndexLine {
         block_min_ms: min_ms,

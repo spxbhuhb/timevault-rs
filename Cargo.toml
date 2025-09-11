@@ -7,13 +7,14 @@ repository = "https://github.com/spxbhuhb/timevault-rs"
 description = "Time-indexed record store for partitioned streams with append-only chunks and background merges."
 keywords = ["time-series", "storage", "tsdb", "log-structured", "embedded"]
 categories = ["database-implementations", "data-structures", "filesystem"]
-readme = "README.md"
+readme = "readme.md"
 
 [badges]
 maintenance = { status = "experimental" }
 
 [features]
 default = []
+stress-tests = []
 
 [dependencies]
 thiserror = "1"

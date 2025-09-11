@@ -1,19 +1,40 @@
+#![cfg(feature = "stress-tests")]
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
-use tempfile::TempDir;
 use uuid::Uuid;
 
-use timevault::config::{StoreConfig, PartitionConfig};
-use timevault::store::Store;
+use timevault::config::{PartitionConfig, StoreConfig};
 use timevault::partition::PartitionHandle;
 use timevault::plugins::FormatPlugin;
+use timevault::store::Store;
 
 #[test]
 fn stress_parallel_append_and_read() {
     const PARTS: usize = 4;
     const RECORDS_PER_PART: usize = 250_000; // 4 * 250k = 1M records
 
-    let td = TempDir::new().unwrap();
-    let root = td.path().to_path_buf();
+    // Persist outputs under ./target/test similar to append_persistent_test
+    let project_root = project_root();
+    let tests_root = project_root.join("target").join("test");
+    fs::create_dir_all(&tests_root).unwrap();
+
+    // Clear previous runs for this test to avoid accumulation
+    if let Ok(entries) = fs::read_dir(&tests_root) {
+        for e in entries.flatten() {
+            if let Ok(name) = e.file_name().into_string() {
+                if name.starts_with("stress_parallel_") {
+                    let _ = fs::remove_dir_all(e.path());
+                }
+            }
+        }
+    }
+
+    let id = Uuid::now_v7();
+    let root = tests_root.join(format!("stress_parallel_{}", id));
+    fs::create_dir_all(&root).unwrap();
+    eprintln!("stress_parallel test root: {:?}", root);
+
     let store = Store::open(&root, StoreConfig::default()).unwrap();
 
     let mut handles = Vec::new();
@@ -55,5 +76,13 @@ fn stress_parallel_append_and_read() {
     for h in handles {
         assert_eq!(h.stats().appends, RECORDS_PER_PART as u64);
     }
+}
+
+// Best-effort to get the project root when running with `cargo test`.
+fn project_root() -> PathBuf {
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        return PathBuf::from(manifest_dir);
+    }
+    std::env::current_dir().unwrap()
 }
 
