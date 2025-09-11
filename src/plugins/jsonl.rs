@@ -34,16 +34,13 @@ impl<'a> JsonlScanner<'a> {
     }
 }
 
-#[derive(Deserialize)]
-struct JsonLine { timestamp: i64, len: Option<u32> }
-
 impl<'a> ChunkScanner for JsonlScanner<'a> {
     fn next(&mut self) -> io::Result<Option<RecordMeta>> {
         let buf = self.reader.fill_buf()?;
         if buf.is_empty() { return Ok(None); }
         let line_end = match memchr::memchr(b'\n', buf) { Some(i) => i, None => buf.len() };
         let line = &buf[..line_end];
-        let json = std::str::from_utf8(line).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "utf8"))?;
+        let json = std::str::from_utf8(line).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid utf8 in jsonl"))?;
         let JL { timestamp } = serde_json::from_str::<JL>(json)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "json"))?;
         let rec_len = line_end as u32 + 1; // include newline

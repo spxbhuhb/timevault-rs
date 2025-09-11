@@ -7,19 +7,9 @@ use crate::partition::PartitionRuntime;
 use crate::store::paths;
 use uuid::Uuid;
 
-// Initialize runtime by reading metadata for plugin selection, then manifest/index/chunk per design.md.
-pub fn load_partition_runtime_data(root: &std::path::Path, id: Uuid) -> crate::errors::Result<PartitionRuntime> {
-    // Resolve plugin via metadata when present; fall back to default config plugin.
-    let part_dir = paths::partition_dir(root, id);
-    let meta_path = paths::partition_metadata(&part_dir);
-    let plugin: std::sync::Arc<dyn FormatPlugin> = if meta_path.exists() {
-        let m = crate::disk::metadata::load_metadata(&meta_path)?;
-        crate::plugins::resolve_plugin(&m.format_plugin)?
-    } else {
-        return Err(crate::errors::TvError::MissingFile { path: meta_path });
-    };
-
-    // Continue with recovery using the resolved plugin
+// Initialize runtime by using provided metadata for plugin selection, then manifest/index/chunk per design.md.
+pub fn load_partition_runtime_data(root: &std::path::Path, id: Uuid, meta: &crate::disk::metadata::MetadataJson) -> crate::errors::Result<PartitionRuntime> {
+    let plugin = crate::plugins::resolve_plugin(&meta.format_plugin)?;
     load_partition_runtime_data_inner(root, id, &*plugin)
 }
 

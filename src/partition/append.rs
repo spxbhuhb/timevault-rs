@@ -7,6 +7,7 @@ use crate::store::paths;
 use crate::disk::chunk;
 
 pub fn append(h: &PartitionHandle, ts_ms: i64, payload: &[u8]) -> Result<crate::partition::AppendAck> {
+    if h.inner.read_only { return Err(TvError::ReadOnly); }
     let part_dir = paths::partition_dir(h.root(), h.id());
     let chunks_dir = paths::chunks_dir(&part_dir);
 
@@ -15,7 +16,7 @@ pub fn append(h: &PartitionHandle, ts_ms: i64, payload: &[u8]) -> Result<crate::
         ensure_ordering(&rt, ts_ms)?;
         maybe_roll(h, &part_dir, &mut rt, ts_ms, payload.len() as u64)?;
         let chunk_id = rt.cur_chunk_id.expect("chunk id set by maybe_roll/start_new_chunk");
-        let off = append_to_chunk(&chunks_dir, chunk_id, &payload)?;
+        let off = append_to_chunk(&chunks_dir, chunk_id, &payload)?; // payload is opaque, it is the responsibility of the caller to validate it
         // Index block bookkeeping
         start_block_if_needed(&mut rt, ts_ms, off);
         extend_block(&mut rt, ts_ms, payload.len() as u64);
@@ -162,9 +163,12 @@ fn start_new_chunk(manifest_path: &std::path::Path, rt: &mut crate::partition::P
 }
 
 fn ts_to_iso(ts_ms: i64) -> String {
-    use chrono::{NaiveDateTime, Utc, SecondsFormat, TimeZone};
-    let ndt = NaiveDateTime::from_timestamp_millis(ts_ms).unwrap_or_else(|| NaiveDateTime::from_timestamp(0, 0));
-    Utc.from_utc_datetime(&ndt).to_rfc3339_opts(SecondsFormat::Millis, true)
+    use chrono::{Utc, SecondsFormat, TimeZone};
+    if let Some(dt) = Utc.timestamp_millis_opt(ts_ms).single() {
+        dt.to_rfc3339_opts(SecondsFormat::Millis, true)
+    } else {
+        chrono::DateTime::<Utc>::from_timestamp(0, 0).unwrap().to_rfc3339_opts(SecondsFormat::Millis, true)
+    }
 }
 
 

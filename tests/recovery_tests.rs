@@ -30,7 +30,7 @@ fn write_metadata(part_dir: &PathBuf, id: Uuid) {
     };
     let p = paths::partition_metadata(part_dir);
     let s = serde_json::to_vec(&m).unwrap();
-    std::fs::write(p, s).unwrap();
+    fs::write(p, s).unwrap();
 }
 
 fn write_manifest_line(manifest_path: &PathBuf, line: &ManifestLine) {
@@ -59,10 +59,13 @@ fn write_index(chunks_dir: &PathBuf, chunk_id: Uuid, lines: &[IndexLine]) -> Pat
 }
 
 fn idx_line(min_ms: i64, max_ms: i64, off: u64, len: u64) -> IndexLine {
-    use chrono::{NaiveDateTime, Utc, SecondsFormat, TimeZone};
+    use chrono::{Utc, SecondsFormat, TimeZone};
     let to_iso = |ms: i64| {
-        let ndt = NaiveDateTime::from_timestamp_millis(ms).unwrap();
-        Utc.from_utc_datetime(&ndt).to_rfc3339_opts(SecondsFormat::Millis, true)
+        if let Some(dt) = Utc.timestamp_millis_opt(ms).single() {
+            dt.to_rfc3339_opts(SecondsFormat::Millis, true)
+        } else {
+            chrono::DateTime::<Utc>::from_timestamp(0, 0).unwrap().to_rfc3339_opts(SecondsFormat::Millis, true)
+        }
     };
     IndexLine {
         block_min_ms: min_ms,
@@ -81,9 +84,11 @@ fn recovery_no_manifest_returns_default() {
     let id = Uuid::now_v7();
     // Create partition dir and metadata but do not create manifest
     let part_dir = paths::partition_dir(&root, id);
-    std::fs::create_dir_all(paths::chunks_dir(&part_dir)).unwrap();
+    fs::create_dir_all(paths::chunks_dir(&part_dir)).unwrap();
     write_metadata(&part_dir, id);
-    let cache = load_partition_runtime_data(&root, id).unwrap();
+    let meta_path = paths::partition_metadata(&part_dir);
+    let m = timevault::disk::metadata::load_metadata(&meta_path).unwrap();
+    let cache = load_partition_runtime_data(&root, id, &m).unwrap();
     assert!(cache.cur_chunk_id.is_none());
     assert_eq!(cache.cur_chunk_size_bytes, 0);
 }
@@ -97,10 +102,12 @@ fn recovery_missing_chunk_yields_error() {
     let manifest = paths::partition_manifest(&part_dir);
 
     let chunk_id = Uuid::now_v7();
-    // Manifest references last chunk id but we don't create the chunk file
+    // Manifest references last chunk id, but we don't create the chunk file
     write_manifest_line(&manifest, &ManifestLine { chunk_id, min_ts_ms: 100, max_ts_ms: Some(200) });
 
-    let err = load_partition_runtime_data(&root, id).unwrap_err();
+    let meta_path = paths::partition_metadata(&part_dir);
+    let m = timevault::disk::metadata::load_metadata(&meta_path).unwrap();
+    let err = load_partition_runtime_data(&root, id, &m).unwrap_err();
     match err { timevault::errors::TvError::MissingFile { path } => assert_eq!(path, paths::chunk_file(&chunks_dir, chunk_id)), other => panic!("unexpected error: {other:?}") }
 }
 
@@ -114,10 +121,12 @@ fn recovery_missing_index_yields_error() {
 
     let chunk_id = Uuid::now_v7();
     write_manifest_line(&manifest, &ManifestLine { chunk_id, min_ts_ms: 100, max_ts_ms: Some(300) });
-    // Create chunk file but not index
+    // Create a chunk file but not index
     write_chunk(&chunks_dir, chunk_id, br#"{"timestamp":100}\n{"timestamp":200}\n"#.as_ref());
 
-    let err = load_partition_runtime_data(&root, id).unwrap_err();
+    let meta_path = paths::partition_metadata(&part_dir);
+    let m = timevault::disk::metadata::load_metadata(&meta_path).unwrap();
+    let err = load_partition_runtime_data(&root, id, &m).unwrap_err();
     match err { timevault::errors::TvError::MissingFile { path } => assert_eq!(path, paths::index_file(&chunks_dir, chunk_id)), other => panic!("unexpected error: {other:?}") }
 }
 
@@ -139,18 +148,18 @@ fn recovery_with_index_extends_block_and_reads_last_record() {
     let tail = b"{\"timestamp\":350}\n";
     let mut chunk = Vec::new();
     chunk.extend_from_slice(rec1);
-    let off2 = chunk.len() as u64;
     chunk.extend_from_slice(rec2);
-    let off3 = chunk.len() as u64;
     chunk.extend_from_slice(tail);
     write_chunk(&chunks_dir, chunk_id, &chunk);
 
-    // Index covers first two records as one block
+    // Index covers the first two records as one block
     let block_len = rec1.len() as u64 + rec2.len() as u64;
     let idx = vec![idx_line(100, 200, 0, block_len)];
     write_index(&chunks_dir, chunk_id, &idx);
 
-    let cache = load_partition_runtime_data(&root, id).unwrap();
+    let meta_path = paths::partition_metadata(&part_dir);
+    let m = timevault::disk::metadata::load_metadata(&meta_path).unwrap();
+    let cache = load_partition_runtime_data(&root, id, &m).unwrap();
     // last_index_block_min/max should be extended to 350, and size increased by tail len
     assert_eq!(cache.cur_index_block_min_ts_ms, 100);
     assert_eq!(cache.cur_index_block_max_ts_ms, 350);
@@ -190,12 +199,14 @@ fn recovery_two_chunks_second_has_empty_index_initializes_runtime() {
     // Touch empty index file for second chunk
     {
         let ip = paths::index_file(&chunks_dir, chunk2);
-        std::fs::File::create(&ip).unwrap();
+        File::create(&ip).unwrap();
     }
     // Open manifest entry for second chunk
     write_manifest_line(&manifest, &ManifestLine { chunk_id: chunk2, min_ts_ms: 1002, max_ts_ms: None });
 
-    let rt = load_partition_runtime_data(&root, id).unwrap();
+    let meta_path = paths::partition_metadata(&part_dir);
+    let m = timevault::disk::metadata::load_metadata(&meta_path).unwrap();
+    let rt = load_partition_runtime_data(&root, id, &m).unwrap();
     // Runtime should point to the current (second) chunk
     assert_eq!(rt.cur_chunk_id, Some(chunk2));
     assert_eq!(rt.cur_chunk_min_ts_ms, 1002);
@@ -234,7 +245,9 @@ fn recovery_seek_to_misaligned_offset_errors() {
     let idx = vec![idx_line(100, 100, 0, 1)];
     write_index(&chunks_dir, chunk_id, &idx);
 
-    let err = load_partition_runtime_data(&root, id).unwrap_err();
+    let meta_path = paths::partition_metadata(&part_dir);
+    let m = timevault::disk::metadata::load_metadata(&meta_path).unwrap();
+    let err = load_partition_runtime_data(&root, id, &m).unwrap_err();
     // Expect an Io error originating from seek_to invalid input
     match err {
         timevault::errors::TvError::Io(e) => assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput),

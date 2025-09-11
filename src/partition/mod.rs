@@ -42,7 +42,7 @@ struct PartitionInner {
     pub cfg: RwLock<PartitionConfig>,
     pub stats: Mutex<PartitionStats>,
     pub runtime: RwLock<PartitionRuntime>,
-    pub plugin: std::sync::Arc<dyn crate::plugins::FormatPlugin>,
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -72,8 +72,6 @@ impl PartitionHandle {
         // Create empty manifest.json
         let manifest_path = crate::store::paths::partition_manifest(&part_dir);
         if !manifest_path.exists() { std::fs::File::create(&manifest_path)?; }
-        // Resolve plugin and init runtime
-        let plugin = crate::plugins::resolve_plugin(&cfg.format_plugin)?;
         // Initialize runtime with partition context for newly created partition
         let mut rt = PartitionRuntime::default();
         rt.cur_partition_root = root.clone();
@@ -84,26 +82,27 @@ impl PartitionHandle {
             cfg: RwLock::new(cfg),
             stats: Mutex::new(Default::default()),
             runtime: RwLock::new(rt),
-            plugin,
+            read_only: false,
         };
         Ok(Self { inner: std::sync::Arc::new(inner) })
     }
 
-    pub fn open(root: PathBuf, id: Uuid) -> Result<Self> {
+    pub fn open(root: PathBuf, id: Uuid) -> Result<Self> { Self::open_with_opts(root, id, false) }
+
+    pub fn open_with_opts(root: PathBuf, id: Uuid, read_only: bool) -> Result<Self> {
         // Resolve plugin and config from metadata when present
         let part_dir = crate::store::paths::partition_dir(&root, id);
         let meta_path = crate::store::paths::partition_metadata(&part_dir);
-        let (cfg, plugin): (PartitionConfig, std::sync::Arc<dyn crate::plugins::FormatPlugin>) = if meta_path.exists() {
+        let (m, cfg): (crate::disk::metadata::MetadataJson, PartitionConfig) = if meta_path.exists() {
             let m = crate::disk::metadata::load_metadata(&meta_path)?;
             // Optionally validate id match; ignore mismatch to keep minimal
-            let cfg = PartitionConfig { format_version: m.format_version, format_plugin: m.format_plugin.clone(), chunk_roll: m.chunk_roll, index: m.index, retention: m.retention };
-            let p = crate::plugins::resolve_plugin(&m.format_plugin)?;
-            (cfg, p)
+            let cfg = PartitionConfig { format_version: m.format_version, format_plugin: m.format_plugin.clone(), chunk_roll: m.chunk_roll.clone(), index: m.index.clone(), retention: m.retention.clone() };
+            (m, cfg)
         } else {
             return Err(crate::errors::TvError::MissingFile { path: meta_path });
         };
-        // Load full runtime using the resolved plugin
-        let cache = self::recovery::load_partition_runtime_data(&root, id)?;
+        // Load full runtime using the resolved plugin and provided metadata
+        let cache = self::recovery::load_partition_runtime_data(&root, id, &m)?;
         // Seed runtime with partition context
         let mut cache = cache;
         cache.cur_partition_root = root.clone();
@@ -114,7 +113,7 @@ impl PartitionHandle {
             cfg: RwLock::new(cfg),
             stats: Mutex::new(Default::default()),
             runtime: RwLock::new(cache),
-            plugin, 
+            read_only,
         };
         Ok(Self { inner: std::sync::Arc::new(inner) })
     }
@@ -130,7 +129,6 @@ impl PartitionHandle {
     pub fn id(&self) -> Uuid { self.inner.id }
     pub fn root(&self) -> &PathBuf { &self.inner.root }
     pub fn cfg(&self) -> PartitionConfig { self.inner.cfg.read().clone() }
-    pub(crate) fn runtime(&self) -> PartitionRuntime { self.inner.runtime.read().clone() }
     #[cfg(test)]
     pub fn cfg_mut_for_tests(&self) -> parking_lot::RwLockWriteGuard<'_, PartitionConfig> { self.inner.cfg.write() }
 }

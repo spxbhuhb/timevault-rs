@@ -17,8 +17,10 @@ pub enum TvError {
     OutOfOrder { ts_ms: i64, last: i64 },
     #[error("partition not found: {0}")]
     PartitionNotFound(uuid::Uuid),
-    #[error("invalid range: from>{to}")]
+    #[error("invalid range: {from} > {to}")]
     InvalidRange { from: i64, to: i64 },
     #[error("missing required file: {path}")]
     MissingFile { path: PathBuf },
+    #[error("partition is read-only")]
+    ReadOnly,
 }

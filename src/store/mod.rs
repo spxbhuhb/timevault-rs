@@ -28,7 +28,7 @@ impl Store {
     pub fn open_partition(&self, partition: Uuid) -> Result<PartitionHandle> {
         let mut map = self.partitions.write();
         if let Some(h) = map.get(&partition) { return Ok(h.clone()); }
-        let handle = PartitionHandle::open(self.root.clone(), partition)?;
+        let handle = PartitionHandle::open_with_opts(self.root.clone(), partition, self.cfg.read_only)?;
         map.insert(partition, handle.clone());
         Ok(handle)
     }
