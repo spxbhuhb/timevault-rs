@@ -124,3 +124,63 @@ fn truncate_to_empty_partition() {
     let data = h.read_range(0, 1000).unwrap();
     assert_eq!(data.len(), 0);
 }
+
+#[test]
+fn truncate_inside_closed_chunk_drops_partial_block() {
+    let td = TempDir::new().unwrap();
+    let root = td.path().to_path_buf();
+    let id = Uuid::now_v7();
+    let part_dir = paths::partition_dir(&root, id);
+    fs::create_dir_all(paths::chunks_dir(&part_dir)).unwrap();
+    // Roll after roughly five records so first chunk becomes closed
+    write_metadata(&part_dir, id, 150, 2);
+    let h = PartitionHandle::open(root.clone(), id).unwrap();
+
+    // First chunk will have records 1-5, second chunk record 6
+    for i in 1..=6 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+
+    // Cut inside the closed first chunk at key 4. Record 3 (<4) is also dropped
+    // because it shares an index block with record 4.
+    h.truncate(4).unwrap();
+    let data = h.read_range(0, 100).unwrap();
+    assert_eq!(count_lines(&data), 2);
+}
+
+#[test]
+fn truncate_idempotent() {
+    let td = TempDir::new().unwrap();
+    let root = td.path().to_path_buf();
+    let id = Uuid::now_v7();
+    let part_dir = paths::partition_dir(&root, id);
+    fs::create_dir_all(paths::chunks_dir(&part_dir)).unwrap();
+    write_metadata(&part_dir, id, u64::MAX, 2);
+    let h = PartitionHandle::open(root.clone(), id).unwrap();
+
+    for i in 1..=5 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+
+    let manifest_path = paths::partition_manifest(&part_dir);
+    h.truncate(4).unwrap();
+    let first = std::fs::read_to_string(&manifest_path).unwrap();
+    h.truncate(4).unwrap();
+    let second = std::fs::read_to_string(&manifest_path).unwrap();
+    assert_eq!(first, second, "manifest should not change on repeat truncate");
+    let data = h.read_range(1, 100).unwrap();
+    assert_eq!(count_lines(&data), 3);
+}
+
+#[test]
+fn truncate_open_chunk_without_index() {
+    let td = TempDir::new().unwrap();
+    let root = td.path().to_path_buf();
+    let id = Uuid::now_v7();
+    let part_dir = paths::partition_dir(&root, id);
+    fs::create_dir_all(paths::chunks_dir(&part_dir)).unwrap();
+    // Large index cadence so no index lines exist yet
+    write_metadata(&part_dir, id, u64::MAX, 100);
+    let h = PartitionHandle::open(root.clone(), id).unwrap();
+
+    for i in 1..=5 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+    h.truncate(4).unwrap();
+    let data = h.read_range(1, 100).unwrap();
+    assert_eq!(count_lines(&data), 3);
+}
