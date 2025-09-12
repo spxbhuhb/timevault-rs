@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use std::io::Write;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ManifestLine {
@@ -58,6 +59,21 @@ pub fn close_manifest_line(path: &std::path::Path, rt: &crate::partition::Partit
     }
     std::fs::rename(&tmp, path)?;
     // Best-effort fsync dir
+    if let Some(dir) = path.parent() { let _ = crate::store::fsync::fsync_dir(dir); }
+    Ok(())
+}
+
+// Atomically rewrite entire manifest with provided lines.
+pub fn rewrite_manifest_atomic(path: &std::path::Path, lines: &[ManifestLine]) -> crate::errors::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    {
+        let mut f = std::fs::OpenOptions::new().create(true).truncate(true).write(true).open(&tmp)?;
+        for l in lines {
+            let mut buf = serde_json::to_vec(l)?; buf.push(b'\n'); f.write_all(&buf)?;
+        }
+        f.flush()?; f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)?;
     if let Some(dir) = path.parent() { let _ = crate::store::fsync::fsync_dir(dir); }
     Ok(())
 }

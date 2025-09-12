@@ -3,6 +3,7 @@ pub mod read;
 pub mod roll;
 pub mod retention;
 pub mod recovery;
+pub mod truncate;
 
 use crate::admin::stats::PartitionStats;
 use crate::config::PartitionConfig;
@@ -103,7 +104,7 @@ impl PartitionHandle {
             return Err(crate::errors::TvError::MissingFile { path: meta_path });
         };
         // Load full runtime using the resolved plugin and provided metadata
-        let cache = self::recovery::load_partition_runtime_data(&root, id, &m)?;
+        let cache = recovery::load_partition_runtime_data(&root, id, &m)?;
         // Seed runtime with partition context
         let mut cache = cache;
         cache.cur_partition_root = root.clone();
@@ -119,11 +120,12 @@ impl PartitionHandle {
         Ok(Self { inner: std::sync::Arc::new(inner) })
     }
 
-    pub fn append(&self, order_key: u64, payload: &[u8]) -> Result<AppendAck> { self::append::append(self, order_key, payload) }
-    pub fn read_range(&self, from_key: u64, to_key: u64) -> Result<Vec<u8>> { self::read::read_range(self, from_key, to_key) }
-    pub fn force_roll(&self) -> Result<()> { self::roll::force_roll(self) }
+    pub fn append(&self, order_key: u64, payload: &[u8]) -> Result<AppendAck> { append::append(self, order_key, payload) }
+    pub fn read_range(&self, from_key: u64, to_key: u64) -> Result<Vec<u8>> { read::read_range(self, from_key, to_key) }
+    pub fn force_roll(&self) -> Result<()> { roll::force_roll(self) }
     pub fn stats(&self) -> PartitionStats { self.inner.stats.lock().clone() }
-    pub fn set_config(&self, delta: PartitionConfigDelta) -> Result<()> { self::append::set_config(self, delta) }
+    pub fn set_config(&self, delta: PartitionConfigDelta) -> Result<()> { append::set_config(self, delta) }
+    pub fn truncate(&self, order_key: u64) -> Result<()> { truncate::truncate(self, order_key) }
 }
 
 impl PartitionHandle {

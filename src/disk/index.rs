@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
 
 use crate::errors::Result;
 
@@ -27,8 +27,6 @@ pub fn load_index_lines(file: &File) -> Result<Vec<IndexLine>> {
 // Create an empty index file for the current partition and given chunk.
 // Uses partition runtime to locate the chunks directory.
 pub fn create_empty_index_file(rt: &crate::partition::PartitionRuntime, chunk_id: uuid::Uuid) -> Result<()> {
-    use std::fs::OpenOptions;
-    use std::io::Write;
     let part_dir = crate::store::paths::partition_dir(&rt.cur_partition_root, rt.cur_partition_id);
     let chunks_dir = crate::store::paths::chunks_dir(&part_dir);
     let ip = crate::store::paths::index_file(&chunks_dir, chunk_id);
@@ -36,5 +34,20 @@ pub fn create_empty_index_file(rt: &crate::partition::PartitionRuntime, chunk_id
     f.flush()?;
     let _ = f.sync_all();
     if let Some(dir) = ip.parent() { let _ = crate::store::fsync::fsync_dir(dir); }
+    Ok(())
+}
+
+// Atomically rewrite an index file with the provided lines. Ensures data and directory durability.
+pub fn rewrite_index_atomic(path: &std::path::Path, lines: &[IndexLine]) -> Result<()> {
+    let tmp = path.with_extension("index.tmp");
+    {
+        let mut f = OpenOptions::new().create(true).truncate(true).write(true).open(&tmp)?;
+        for l in lines {
+            let mut buf = serde_json::to_vec(l)?; buf.push(b'\n'); f.write_all(&buf)?;
+        }
+        f.flush()?; let _ = f.sync_all();
+    }
+    std::fs::rename(&tmp, path)?;
+    if let Some(dir) = path.parent() { let _ = crate::store::fsync::fsync_dir(dir); }
     Ok(())
 }

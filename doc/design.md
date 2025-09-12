@@ -2,7 +2,8 @@
 
 ## 0. Purpose & Scope
 
-An embedded Rust library for persistently storing records keyed by an increasing u64 order key (typically a timestamp). Files are grouped by partitions (UUIDs). Optimized for high-throughput appends and inexpensive sequential reads by order-key range.
+An embedded Rust library for persistently storing records keyed by an increasing u64 order key (typically a timestamp).
+Files are grouped by partitions (UUIDs). Optimized for high-throughput appends and inexpensive sequential reads by order-key range.
 
 - In-scope: on-disk layout, directory structure, file formats, IDs, append semantics, indexing, retention, observability.
 - Out-of-scope (provided elsewhere): Write-ahead logging (WAL), consensus/replication, and crash recovery are handled
@@ -290,6 +291,46 @@ Rolling:
     - Recover the bytes of the last record from the open chunk using the format plugin
       - set `last_record_bytes` in the cache to the recovered bytes 
     - adds the metadata to the cache
+
+### 4.5 Truncate
+
+Truncate removes all records with `order_key ≥ cutoff_key` from a partition.
+
+API: `PartitionHandle::truncate(cutoff_key: u64) -> Result<()>`
+
+Semantics:
+- No-op if `cutoff_key` is strictly greater than the last record in the partition.
+- If `cutoff_key` is less than or equal to the first record in the partition, the partition becomes empty (manifest cleared, files removed).
+- Operation is inclusive at the boundary: records with `order_key == cutoff_key` are removed.
+
+Algorithm (per manifest order):
+1. Identify chunks to delete entirely: any chunk where `chunk_min_key ≥ cutoff_key`.
+   - Delete its `.chunk` and `.index` files.
+   - Fsync the chunks directory after deletions to persist unlinks.
+2. At most one overlapping chunk may remain (the last chunk with `min < cutoff_key`). Handle it by case:
+   - Closed chunk (has `max_order_key`):
+     - Keep only index blocks with `block_max_key < cutoff_key`.
+     - Truncate the chunk file to the end offset of the last kept block.
+     - Rewrite the index file to contain only kept blocks.
+     - Update the manifest entry’s `max_order_key` to the last kept key. If no blocks remain, delete the chunk entirely.
+   - Open chunk (no `max_order_key`):
+     - Load its index and compute `base_end_off` = end of the last indexed block strictly before cutoff.
+     - Scan from `base_end_off` with the partition’s FormatPlugin until the first record with `ts_ms ≥ cutoff_key`.
+     - Truncate the chunk at the end of the last kept record.
+     - If any unindexed tail was kept, append a synthetic index block describing `[base_end_off, new_len)` with accurate min/max keys.
+     - Leave the manifest entry open (no `max_order_key`).
+3. Rewrite the manifest atomically with durable rename (write temp, fsync(temp), rename, fsync(dir)).
+4. Refresh in-memory runtime by running the normal recovery flow to ensure subsequent appends/reads see a consistent state.
+
+Durability & Atomicity:
+- Index rewrites and manifest rewrites use write-then-rename and fsync the parent directory.
+- Chunk truncation uses `f.set_len(new_len)` and syncs the file; deletions are followed by `fsync(chunks_dir)`.
+- By the time `truncate` returns, all on-disk changes are durably persisted.
+
+Edge cases:
+- Idempotent: re-running truncate at the same cutoff yields no further changes.
+- Works with empty manifest (noop) and read-only partitions error (`ReadOnly`).
+- Preserves correctness invariants: manifest remains ordered, non-overlapping; reads route using updated index/manifest.
 
 ## 5. Indexing & Queries
 
