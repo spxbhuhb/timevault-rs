@@ -1,28 +1,24 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::File;
 
 use uuid::Uuid;
 
-use crate::disk::index::{IndexLine, load_index_lines};
-use crate::disk::manifest::{ManifestLine, load_manifest};
-use crate::disk::metadata::load_metadata;
+use crate::disk::index::{load_index_lines, IndexLine};
+use crate::disk::manifest::{load_manifest, ManifestLine};
 use crate::errors::{Result, TvError};
+use crate::partition::common;
 use crate::partition::PartitionHandle;
 use crate::plugins::FormatPlugin;
 use crate::store::paths;
 
 pub fn truncate(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
-    if h.inner.read_only { return Err(TvError::ReadOnly); }
-    let part_dir = paths::partition_dir(h.root(), h.id());
-    let chunks_dir = paths::chunks_dir(&part_dir);
-    let manifest_path = paths::partition_manifest(&part_dir);
-    if !manifest_path.exists() { return Err(TvError::MissingFile { path: manifest_path }); }
+    common::ensure_writable(h)?;
+    let p = common::paths_for(h)?;
 
-    let manifest = load_manifest(&manifest_path)?;
+    let manifest = load_manifest(&p.manifest_path)?;
     if manifest.is_empty() { return Ok(()); }
 
     // Load metadata and plugin for potential scanning
-    let meta = load_metadata(&paths::partition_metadata(&part_dir))?;
-    let plugin = crate::plugins::resolve_plugin(&meta.format_plugin)?;
+    let (meta, plugin) = common::load_meta_and_plugin(&p.part_dir)?;
 
     // Determine chunks to keep/delete and potential overlapping chunk
     let mut new_manifest: Vec<ManifestLine> = Vec::new();
@@ -52,7 +48,7 @@ pub fn truncate(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
     if let Some(i) = overlap_idx {
         let m = &manifest[i];
         // Perform truncation of chunk/index at cutoff
-        let (kept_any, new_max_opt) = truncate_chunk_and_index(&chunks_dir, m.chunk_id, cutoff_key, m.max_order_key, &*plugin)?;
+        let (kept_any, new_max_opt) = truncate_chunk_and_index(&p.chunks_dir, m.chunk_id, cutoff_key, m.max_order_key, &*plugin)?;
         if kept_any {
             // Update manifest line
             let mut upd = m.clone();
@@ -70,27 +66,9 @@ pub fn truncate(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
         }
     }
 
-    // Rewrite manifest atomically
-    crate::disk::manifest::rewrite_manifest_atomic(&manifest_path, &new_manifest)?;
-
-    // Delete all chunks that are beyond cutoff (min >= cutoff) and any overlap removed chunk
-    for id in to_delete.iter() {
-        let cp = paths::chunk_file(&chunks_dir, *id);
-        let ip = paths::index_file(&chunks_dir, *id);
-        let _ = fs::remove_file(cp);
-        let _ = fs::remove_file(ip);
-    }
-    // Best-effort fsync the chunks directory after deletions to persist unlinks
-    let _ = crate::store::fsync::fsync_dir(&chunks_dir);
-    
-    // Refresh runtime by re-running recovery
-    let rt = crate::partition::recovery::load_partition_runtime_data(h.root(), h.id(), &meta)?;
-    *h.inner.runtime.write() = {
-        let mut r = rt.clone();
-        r.cur_partition_root = h.inner.root.clone();
-        r.cur_partition_id = h.inner.id;
-        rt
-    };
+    common::rewrite_manifest(&p.manifest_path, &new_manifest)?;
+    common::delete_chunk_files(&p.chunks_dir, &to_delete);
+    common::refresh_runtime(h, &meta)?;
 
     Ok(())
 }
@@ -161,13 +139,13 @@ fn truncate_chunk_and_index(
     // If no bytes remain, delete files by caller
     if new_len == 0 {
         // Truncate files to zero for safety; caller may remove them
-        let _ = truncate_file(&chunk_path, 0);
+        let _ = common::truncate_file(&chunk_path, 0);
         let _ = crate::disk::index::rewrite_index_atomic(&index_path, &[]);
         return Ok((false, None));
     }
 
     // Truncate chunk file
-    truncate_file(&chunk_path, new_len)?;
+    common::truncate_file(&chunk_path, new_len)?;
 
     // Rewrite index file to only kept blocks (no partial adjustment). For open chunk, kept blocks already end <= new_len.
     // For closed chunk, we ensured end is exactly last kept block end.
@@ -178,9 +156,3 @@ fn truncate_chunk_and_index(
     Ok((true, new_max_key))
 }
 
-fn truncate_file(path: &std::path::Path, new_len: u64) -> Result<()> {
-    let f = OpenOptions::new().write(true).open(path)?;
-    f.set_len(new_len)?;
-    let _ = f.sync_all();
-    Ok(())
-}

@@ -292,7 +292,48 @@ Rolling:
       - set `last_record_bytes` in the cache to the recovered bytes 
     - adds the metadata to the cache
 
-### 4.5 Truncate
+### 4.5 Purge
+
+Purge removes all records with `order_key ≤ cutoff_key` from a partition.
+
+API: `PartitionHandle::purge(cutoff_key: u64) -> Result<()>`
+
+Semantics:
+- No-op if `cutoff_key` is strictly less than the first record in the partition.
+- If `cutoff_key` is greater than or equal to the last record in the partition, the partition becomes empty (manifest cleared, files removed).
+- Operation is inclusive at the boundary: records with `order_key == cutoff_key` are removed.
+
+Algorithm (per manifest order):
+1. Identify chunks to delete entirely: any rolled chunk where `chunk_max_key ≤ cutoff_key`.
+   - Delete its `.chunk` and `.index` files.
+   - Fsync the chunks directory after deletions to persist unlinks.
+2. At most one overlapping chunk may remain (the first chunk with `min ≤ cutoff_key < max`, or open with `min ≤ cutoff_key`). Handle it by case:
+   - Closed chunk (has `max_order_key`):
+     - Compute `scan_start` = end of the last index block with `block_max_key ≤ cutoff_key`.
+     - Scan forward with the FormatPlugin to find the first record with `ts_ms > cutoff_key` → `copy_start` and its key → `new_min_key`.
+     - Rewrite the chunk by copying the tail `[copy_start, EOF)` into place (atomic temp + rename).
+     - Rewrite the index:
+       - Drop all blocks with `block_min_key ≤ cutoff_key`.
+       - Shift remaining blocks’ `file_offset_bytes` by `-copy_start`.
+       - If there is a gap from 0 to the first kept shifted block, synthesize a leading block `[0, first_kept_off)` with accurate min/max derived from a short scan.
+     - Update the manifest entry’s `min_order_key = new_min_key`; keep `max_order_key` unchanged.
+   - Open chunk (no `max_order_key`):
+     - Same as the closed-chunk procedure, except leave `max_order_key = None`.
+     - If no records remain, delete the chunk entirely.
+3. Rewrite the manifest atomically (write temp, fsync(temp), rename, fsync(dir)).
+4. Refresh in-memory runtime by running normal recovery.
+
+Durability & Atomicity:
+- Chunk rewrite uses write-then-rename and fsync of the parent directory.
+- Index and manifest use write-then-rename with directory fsync.
+- By the time `purge` returns, all on-disk changes are durably persisted.
+
+Edge cases:
+- Idempotent: re-running purge at the same cutoff yields no changes.
+- Works with empty manifest and read-only partitions error (`ReadOnly`).
+- Preserves manifest order and non-overlap.
+
+### 4.6 Truncate
 
 Truncate removes all records with `order_key ≥ cutoff_key` from a partition.
 

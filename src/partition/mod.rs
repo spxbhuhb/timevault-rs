@@ -4,6 +4,8 @@ pub mod roll;
 pub mod retention;
 pub mod recovery;
 pub mod truncate;
+pub mod purge;
+pub mod common;
 
 use crate::admin::stats::PartitionStats;
 use crate::config::PartitionConfig;
@@ -126,6 +128,7 @@ impl PartitionHandle {
     pub fn stats(&self) -> PartitionStats { self.inner.stats.lock().clone() }
     pub fn set_config(&self, delta: PartitionConfigDelta) -> Result<()> { append::set_config(self, delta) }
     pub fn truncate(&self, order_key: u64) -> Result<()> { truncate::truncate(self, order_key) }
+    pub fn purge(&self, order_key: u64) -> Result<()> { purge::purge(self, order_key) }
 }
 
 impl PartitionHandle {
