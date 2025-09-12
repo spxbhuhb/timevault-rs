@@ -57,7 +57,22 @@ fn append_indexed_ranges(chunks_dir: &std::path::Path, chunk_id: Uuid, from_key:
     let mut f = File::open(&chunk_path).map_err(|_| TvError::MissingFile { path: chunk_path.clone() })?;
     let idx_f = File::open(&index_path).map_err(|_| TvError::MissingFile { path: index_path.clone() })?;
     let idx = load_index_lines(&idx_f)?;
-    let ranges = select_block_ranges(&idx, from_key, to_key);
+    let mut ranges = select_block_ranges(&idx, from_key, to_key);
+    // If this is an open chunk, the tail may be unindexed; include it if it overlaps the query.
+    // Detect open chunk by checking if the last index block ends before EOF.
+    if let Ok(meta) = f.metadata() {
+        let file_len = meta.len();
+        if let Some(last) = idx.last() {
+            let last_end = last.file_offset_bytes + last.block_len_bytes;
+            if last_end < file_len {
+                // Unindexed tail exists; include it as a range.
+                ranges.push((last_end, file_len - last_end));
+            }
+        } else {
+            // No index entries; include entire file as a single range.
+            if file_len > 0 { ranges.push((0, file_len)); }
+        }
+    }
     read_and_append_ranges(&mut f, &ranges, out)?;
     Ok(())
 }

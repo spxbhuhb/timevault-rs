@@ -139,11 +139,11 @@ fn truncate_inside_closed_chunk_drops_partial_block() {
     // First chunk will have records 1-5, second chunk record 6
     for i in 1..=6 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
 
-    // Cut inside the closed first chunk at key 4. Record 3 (<4) is also dropped
-    // because it shares an index block with record 4.
+    // Cut inside the closed first chunk at key 4. Previously, record 3 (<4) was dropped
+    // because it shared an index block with record 4. Now it must be preserved.
     h.truncate(4).unwrap();
     let data = h.read_range(0, 100).unwrap();
-    assert_eq!(count_lines(&data), 2);
+    assert_eq!(count_lines(&data), 3);
 }
 
 #[test]

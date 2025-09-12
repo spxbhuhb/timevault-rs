@@ -104,7 +104,7 @@ fn truncate_chunk_and_index(
     }
 
     // Determine new length
-    let mut new_len = base_end_off;
+    let new_len;
     if was_closed_max.is_none() {
         // open chunk: may have unindexed tail; scan from base_end_off to find first rec >= cutoff
         let mut f = File::open(&chunk_path)?;
@@ -120,20 +120,58 @@ fn truncate_chunk_and_index(
             last_kept_end = m.offset + m.len as u64;
             last_kept_key = Some(m.ts_ms as u64);
         }
-        // If we kept some tail bytes past base_end_off, create an index entry for them
-        if last_kept_end > base_end_off {
-            kept_index.push(IndexLine {
-                block_min_key: first_kept_key.unwrap_or(new_max_key.unwrap_or(0)),
-                block_max_key: last_kept_key.unwrap_or(new_max_key.unwrap_or(0)),
-                file_offset_bytes: base_end_off,
-                block_len_bytes: last_kept_end - base_end_off,
-            });
-        }
         new_len = last_kept_end;
         new_max_key = last_kept_key;
     } else {
-        // closed chunk: cut at block boundary determined by index
-        // nothing else to do; new_len already set
+        // closed chunk: precise cut. If cutoff falls inside the next indexed block, scan within it.
+        if index_path.exists() {
+            let f = File::open(&index_path)?;
+            let idx = load_index_lines(&f)?;
+            // Find the first block whose max >= cutoff and whose file_offset == base_end_off
+            if let Some(overlap) = idx.into_iter().find(|b| b.file_offset_bytes == base_end_off && b.block_max_key >= cutoff_key) {
+                // Scan within this block to keep only records < cutoff
+                let mut cf = File::open(&chunk_path)?;
+                let mut scanner = plugin.scanner(&mut cf)?;
+                scanner.seek_to(overlap.file_offset_bytes)?;
+                let mut first_kept_key: Option<u64> = None;
+                let mut last_kept_end = overlap.file_offset_bytes;
+                let mut last_kept_key = new_max_key; // continues from previous blocks
+                while let Some(m) = scanner.next()? {
+                    if (m.offset as u64) >= overlap.file_offset_bytes + overlap.block_len_bytes { break; }
+                    if (m.ts_ms as u64) >= cutoff_key { break; }
+                    if first_kept_key.is_none() { first_kept_key = Some(m.ts_ms as u64); }
+                    last_kept_end = m.offset + m.len as u64;
+                    last_kept_key = Some(m.ts_ms as u64);
+                }
+                if last_kept_end > overlap.file_offset_bytes {
+                    kept_index.push(IndexLine {
+                        block_min_key: first_kept_key.unwrap_or(last_kept_key.unwrap_or(0)),
+                        block_max_key: last_kept_key.unwrap_or(0),
+                        file_offset_bytes: overlap.file_offset_bytes,
+                        block_len_bytes: last_kept_end - overlap.file_offset_bytes,
+                    });
+                }
+                new_len = last_kept_end;
+                new_max_key = last_kept_key;
+            } else {
+                // cutoff at boundary or beyond: new_len remains base_end_off
+                new_len = base_end_off;
+            }
+        } else {
+            // No index for closed chunk: fall back to scanning from start
+            let mut cf = File::open(&chunk_path)?;
+            let mut scanner = plugin.scanner(&mut cf)?;
+            let mut last_kept_end: u64 = 0;
+            let mut last_kept_key: Option<u64> = None;
+            while let Some(m) = scanner.next()? {
+                if (m.ts_ms as u64) >= cutoff_key { break; }
+                last_kept_end = m.offset + m.len as u64;
+                last_kept_key = Some(m.ts_ms as u64);
+            }
+            new_len = last_kept_end;
+            new_max_key = last_kept_key;
+            kept_index.clear(); // unknown block boundaries; will rewrite empty index if exists
+        }
     }
 
     // If no bytes remain, delete files by caller
