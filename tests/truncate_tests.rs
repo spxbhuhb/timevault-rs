@@ -184,3 +184,23 @@ fn truncate_open_chunk_without_index() {
     let data = h.read_range(1, 100).unwrap();
     assert_eq!(count_lines(&data), 3);
 }
+
+#[test]
+fn truncate_inside_open_chunk_with_preceding_closed_chunk() {
+    let td = TempDir::new().unwrap();
+    let root = td.path().to_path_buf();
+    let id = Uuid::now_v7();
+    let part_dir = paths::partition_dir(&root, id);
+    fs::create_dir_all(paths::chunks_dir(&part_dir)).unwrap();
+    // Roll after roughly five records so first chunk becomes closed
+    write_metadata(&part_dir, id, 150, 2);
+    let h = PartitionHandle::open(root.clone(), id).unwrap();
+
+    // Records 1-5 in first closed chunk, 6-10 in second open chunk
+    for i in 1..=10 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+
+    // Truncate inside the second (open) chunk at key 8 -> keep 1..7
+    h.truncate(8).unwrap();
+    let data = h.read_range(0, 100).unwrap();
+    assert_eq!(count_lines(&data), 7);
+}
