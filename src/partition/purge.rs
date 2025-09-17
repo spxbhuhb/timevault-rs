@@ -15,10 +15,29 @@ pub fn purge(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
     common::ensure_writable(h)?;
     let p = common::paths_for(h)?;
 
-    let manifest = load_manifest(&p.manifest_path)?;
-    if manifest.is_empty() { return Ok(()); }
+    // Load meta+plugin and persist last_purge_id durably before doing anything else
+    let (mut meta, plugin) = common::load_meta_and_plugin(&p.part_dir)?;
+    meta.last_purge_id = Some(cutoff_key);
+    let meta_path = paths::partition_metadata(&p.part_dir);
+    crate::disk::atomic::atomic_write_json(&meta_path, &meta)?;
 
-    let (meta, plugin) = common::load_meta_and_plugin(&p.part_dir)?;
+    // If configured as logical purge, return immediately after persisting last_purge_id
+    if meta.logical_purge { return Ok(()); }
+
+    // Physical purge path
+    purge_partition_dir(&p.part_dir, cutoff_key, &*plugin)?;
+
+    // Refresh runtime at the end
+    common::refresh_runtime(h, &meta)?;
+
+    Ok(())
+}
+
+pub fn purge_partition_dir(part_dir: &std::path::Path, cutoff_key: u64, plugin: &dyn FormatPlugin) -> Result<()> {
+    let manifest_path = paths::partition_manifest(part_dir);
+    let chunks_dir = paths::chunks_dir(part_dir);
+    let manifest = load_manifest(&manifest_path)?;
+    if manifest.is_empty() { return Ok(()); }
 
     // Build new manifest and deletion list
     let mut new_manifest: Vec<ManifestLine> = Vec::new();
@@ -31,23 +50,18 @@ pub fn purge(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
         match m.max_order_key {
             Some(max) => {
                 if max <= cutoff_key {
-                    // Entire chunk is purged
                     to_delete.push(m.chunk_id);
                 } else if m.min_order_key > cutoff_key {
-                    // Entire chunk remains as-is (after overlap handled)
-                    if overlap_idx.is_none() { /* might be the first remain, but overlap could be earlier */ }
+                    if overlap_idx.is_none() { }
                     new_manifest.push(m.clone());
                 } else {
-                    // min <= cutoff < max: overlapping
                     overlap_idx = Some(i);
                 }
             }
             None => {
-                // Open chunk
                 if m.min_order_key > cutoff_key {
                     new_manifest.push(m.clone());
                 } else {
-                    // Overlaps (may become empty)
                     overlap_idx = Some(i);
                 }
             }
@@ -57,26 +71,24 @@ pub fn purge(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
     // Process overlap if any
     if let Some(i) = overlap_idx {
         let m = &manifest[i];
-        let (kept_any, new_min_key, was_closed_max) = purge_chunk_from_start(&p.chunks_dir, m.chunk_id, cutoff_key, m.max_order_key, &*plugin)?;
+        let (kept_any, new_min_key, was_closed_max) = purge_chunk_from_start(&chunks_dir, m.chunk_id, cutoff_key, m.max_order_key, plugin)?;
         if kept_any {
-            // Update manifest line: new min changes; keep max for closed, None for open
             let mut upd = m.clone();
             upd.min_order_key = new_min_key.expect("new min key after purge");
             if was_closed_max.is_some() {
-                // keep it closed with same max
                 upd.max_order_key = was_closed_max;
             } else {
                 upd.max_order_key = None;
             }
-            new_manifest.insert(0, upd); // ensure overlap chunk stays first in new manifest
+            new_manifest.insert(0, upd);
         } else {
             to_delete.push(m.chunk_id);
         }
     }
 
-    common::rewrite_manifest(&p.manifest_path, &new_manifest)?;
-    common::delete_chunk_files(&p.chunks_dir, &to_delete);
-    common::refresh_runtime(h, &meta)?;
+    // Rewrite manifest and delete files
+    crate::partition::common::rewrite_manifest(&manifest_path, &new_manifest)?;
+    crate::partition::common::delete_chunk_files(&chunks_dir, &to_delete);
 
     Ok(())
 }

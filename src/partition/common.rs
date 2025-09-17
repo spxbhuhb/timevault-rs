@@ -46,6 +46,9 @@ pub(crate) fn delete_chunk_files(chunks_dir: &std::path::Path, ids: &[Uuid]) {
 }
 
 pub(crate) fn refresh_runtime(h: &PartitionHandle, meta: &crate::disk::metadata::MetadataJson) -> Result<()> {
+    // It might be better performance-wise to update the in-memory runtime directly, but this is simpler.
+    // Purge can do a lot of things, it would be hard to keep track properly, better to just re-load the whole thing.
+    // Maybe we can optimize this later.
     let rt = crate::partition::recovery::load_partition_runtime_data(h.root(), h.id(), meta)?;
     *h.inner.runtime.write() = {
         let mut r = rt.clone();

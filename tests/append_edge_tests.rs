@@ -26,6 +26,8 @@ fn write_metadata(part_dir: &std::path::Path, id: Uuid, index_max_records: u32) 
         index: IndexCfg { max_records: index_max_records, max_hours: 0 },
         retention: RetentionCfg::default(),
         key_is_timestamp: true,
+        logical_purge: false,
+        last_purge_id: None,
     };
     let p = paths::partition_metadata(part_dir);
     fs::write(p, serde_json::to_vec(&m).unwrap()).unwrap();

@@ -109,7 +109,9 @@ Stable per-partition info and knobs (human-friendly JSON, durations are in appro
   "chunk_roll": { "max_bytes": 256000000, "max_hours": 100 },
   "index": { "max_records": 1440, "max_hours": 24 },
   "retention": { "max_days": 365 },
-  "key_is_timestamp": true
+  "key_is_timestamp": true,
+  "logical_purge": false,
+  "last_purge_id": 1700000000000
 }
 ```
 
@@ -298,12 +300,24 @@ Purge removes all records with `order_key ≤ cutoff_key` from a partition.
 
 API: `PartitionHandle::purge(cutoff_key: u64) -> Result<()>`
 
-Semantics:
+Durable intent:
+- Before doing anything else, purge writes `metadata.json.last_purge_id = cutoff_key` atomically (fsync) and returns an error if this fails.
+
+Logical vs Physical purge:
+- Per-partition setting `metadata.json.logical_purge: bool` controls behavior.
+- If `logical_purge == true`: after persisting `last_purge_id`, the function returns immediately without modifying any data.
+  - Note: In this mode, garbage collection must be performed outside the library by another mechanism (e.g., compactor) using `last_purge_id` as the boundary.
+- If `logical_purge == false`: the library performs a physical purge as described below.
+
+Idempotency:
+- Invoking purge with the same `cutoff_key` twice results in no changes on the second run (both logical and physical modes).
+
+Semantics (physical):
 - No-op if `cutoff_key` is strictly less than the first record in the partition.
 - If `cutoff_key` is greater than or equal to the last record in the partition, the partition becomes empty (manifest cleared, files removed).
 - Operation is inclusive at the boundary: records with `order_key == cutoff_key` are removed.
 
-Algorithm (per manifest order):
+Algorithm (per manifest order, physical):
 1. Identify chunks to delete entirely: any rolled chunk where `chunk_max_key ≤ cutoff_key`.
    - Delete its `.chunk` and `.index` files.
    - Fsync the chunks directory after deletions to persist unlinks.

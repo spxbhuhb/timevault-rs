@@ -32,10 +32,11 @@ pub struct PartitionConfig {
     pub index: IndexCfg,
     pub retention: RetentionCfg,
     pub key_is_timestamp: bool,
+    pub logical_purge: bool,
 }
 
 impl Default for PartitionConfig {
     fn default() -> Self {
-        Self { format_version: 1, format_plugin: "jsonl".into(), chunk_roll: Default::default(), index: Default::default(), retention: Default::default(), key_is_timestamp: true }
+        Self { format_version: 1, format_plugin: "jsonl".into(), chunk_roll: Default::default(), index: Default::default(), retention: Default::default(), key_is_timestamp: true, logical_purge: false }
     }
 }

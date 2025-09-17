@@ -19,6 +19,15 @@ pub struct PartitionHandle {
     inner: std::sync::Arc<PartitionInner>,
 }
 
+struct PartitionInner {
+    pub root: PathBuf,
+    pub id: Uuid,
+    pub cfg: RwLock<PartitionConfig>,
+    pub stats: Mutex<PartitionStats>,
+    pub runtime: RwLock<PartitionRuntime>,
+    pub read_only: bool,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct PartitionRuntime {
     // Partition context
@@ -37,15 +46,6 @@ pub struct PartitionRuntime {
     pub cur_index_block_start_off: u64,
     pub cur_index_block_len_bytes: u64,
     pub cur_last_record_bytes: Option<Vec<u8>>,
-}
-
-struct PartitionInner {
-    pub root: PathBuf,
-    pub id: Uuid,
-    pub cfg: RwLock<PartitionConfig>,
-    pub stats: Mutex<PartitionStats>,
-    pub runtime: RwLock<PartitionRuntime>,
-    pub read_only: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +70,8 @@ impl PartitionHandle {
             index: cfg.index.clone(),
             retention: cfg.retention.clone(),
             key_is_timestamp: cfg.key_is_timestamp,
+            logical_purge: cfg.logical_purge,
+            last_purge_id: None,
         };
         let meta_path = crate::store::paths::partition_metadata(&part_dir);
         crate::disk::atomic::atomic_write_json(&meta_path, &meta)?;
@@ -100,7 +102,7 @@ impl PartitionHandle {
         let (m, cfg): (crate::disk::metadata::MetadataJson, PartitionConfig) = if meta_path.exists() {
             let m = crate::disk::metadata::load_metadata(&meta_path)?;
             // Optionally validate id match; ignore mismatch to keep minimal
-            let cfg = PartitionConfig { format_version: m.format_version, format_plugin: m.format_plugin.clone(), chunk_roll: m.chunk_roll.clone(), index: m.index.clone(), retention: m.retention.clone(), key_is_timestamp: m.key_is_timestamp };
+            let cfg = PartitionConfig { format_version: m.format_version, format_plugin: m.format_plugin.clone(), chunk_roll: m.chunk_roll.clone(), index: m.index.clone(), retention: m.retention.clone(), key_is_timestamp: m.key_is_timestamp, logical_purge: m.logical_purge };
             (m, cfg)
         } else {
             return Err(crate::errors::TvError::MissingFile { path: meta_path });

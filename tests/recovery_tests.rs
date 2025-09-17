@@ -28,6 +28,8 @@ fn write_metadata(part_dir: &PathBuf, id: Uuid) {
         index: Default::default(),
         retention: Default::default(),
         key_is_timestamp: true,
+        logical_purge: false,
+        last_purge_id: None,
     };
     let p = paths::partition_metadata(part_dir);
     let s = serde_json::to_vec(&m).unwrap();

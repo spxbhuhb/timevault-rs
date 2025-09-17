@@ -10,6 +10,8 @@ pub struct MetadataJson {
     pub index: super::super::config::IndexCfg,
     pub retention: super::super::config::RetentionCfg,
     pub key_is_timestamp: bool,
+    pub logical_purge: bool,
+    pub last_purge_id: Option<u64>
 }
 
 pub fn load_metadata(path: &std::path::Path) -> crate::errors::Result<MetadataJson> {

@@ -78,6 +78,8 @@ fn write_metadata_with_roll(part_dir: &std::path::Path, id: Uuid, max_bytes: u64
         index: IndexCfg::default(),
         retention: RetentionCfg::default(),
         key_is_timestamp: true,
+        logical_purge: false,
+        last_purge_id: None,
     };
     let p = paths::partition_metadata(part_dir);
     std::fs::write(p, serde_json::to_vec(&m).unwrap()).unwrap();
