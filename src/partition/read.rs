@@ -7,7 +7,11 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use uuid::Uuid;
 
-pub fn read_range(h: &PartitionHandle, from_key: u64, to_key: u64) -> Result<Vec<u8>> {
+/// Reads blocks that cover a range of data from a partition
+///
+/// The function intentionally returns with the whole blocks and lets the caller scan and
+/// drop the unnecessary records in that block.
+pub fn read_range_blocks(h: &PartitionHandle, from_key: u64, to_key: u64) -> Result<Vec<u8>> {
     if from_key > to_key { return Err(TvError::InvalidRange { from: from_key as i64, to: to_key as i64 }); }
     let part_dir = paths::partition_dir(h.root(), h.id());
     let chunks_dir = paths::chunks_dir(&part_dir);

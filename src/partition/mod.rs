@@ -125,7 +125,7 @@ impl PartitionHandle {
     }
 
     pub fn append(&self, order_key: u64, payload: &[u8]) -> Result<AppendAck> { append::append(self, order_key, payload) }
-    pub fn read_range(&self, from_key: u64, to_key: u64) -> Result<Vec<u8>> { read::read_range(self, from_key, to_key) }
+    pub fn read_range(&self, from_key: u64, to_key: u64) -> Result<Vec<u8>> { read::read_range_blocks(self, from_key, to_key) }
     pub fn force_roll(&self) -> Result<()> { roll::force_roll(self) }
     pub fn stats(&self) -> PartitionStats { self.inner.stats.lock().clone() }
     pub fn set_config(&self, delta: PartitionConfigDelta) -> Result<()> { append::set_config(self, delta) }
