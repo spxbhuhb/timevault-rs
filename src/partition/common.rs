@@ -54,7 +54,7 @@ pub(crate) fn refresh_runtime(h: &PartitionHandle, meta: &crate::disk::metadata:
         let mut r = rt.clone();
         r.cur_partition_root = h.inner.root.clone();
         r.cur_partition_id = h.inner.id;
-        rt
+        r
     };
     Ok(())
 }
