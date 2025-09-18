@@ -206,3 +206,30 @@ fn truncate_inside_open_chunk_with_preceding_closed_chunk() {
     let data = h.read_range(0, 100).unwrap();
     assert_eq!(count_lines(&data), 7);
 }
+
+#[test]
+fn truncate_then_append_creates_index_file_in_partition_dir() {
+    let td = TempDir::new().unwrap();
+    let root = td.path().to_path_buf();
+    let id = Uuid::now_v7();
+    let part_dir = paths::partition_dir(&root, id);
+    fs::create_dir_all(paths::chunks_dir(&part_dir)).unwrap();
+    // Aggressive indexing to ensure index files are written immediately
+    write_metadata(&part_dir, id, u64::MAX, 1);
+    let h = PartitionHandle::open(root.clone(), id).unwrap();
+
+    // Initial append to create a chunk and index file, then truncate everything
+    h.append(1, &enc(1, serde_json::json!(1))).unwrap();
+    h.truncate(1).unwrap();
+
+    // Regression check: appending again should place the index file under this partition directory
+    h.append(2, &enc(2, serde_json::json!(2))).unwrap();
+
+    let manifest_path = paths::partition_manifest(&part_dir);
+    let lines = read_manifest_lines(&manifest_path);
+    assert_eq!(lines.len(), 1, "expected a single manifest line after re-append");
+    let chunk_id = lines[0].chunk_id;
+    let chunks_dir = paths::chunks_dir(&part_dir);
+    let index_path = paths::index_file(&chunks_dir, chunk_id);
+    assert!(index_path.exists(), "expected index file {:?} to exist", index_path);
+}
