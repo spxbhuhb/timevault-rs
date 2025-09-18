@@ -7,6 +7,8 @@ use tempfile::TempDir;
 
 use timevault::errors::TvError;
 use timevault::store::locks::acquire_store_lock;
+use timevault::store::Store;
+use timevault::config::StoreConfig;
 
 fn lock_file_path(root: &PathBuf) -> PathBuf { root.join(".timevault.write.lock") }
 
@@ -16,7 +18,7 @@ fn test_acquire_creates_file_and_writes_pid() {
     let root = td.path().to_path_buf();
 
     // First acquisition should succeed
-    acquire_store_lock(&root).unwrap();
+    let _lock = acquire_store_lock(&root).unwrap();
 
     // File should exist and contain pid line
     let p = lock_file_path(&root);
@@ -60,9 +62,28 @@ fn test_acquire_succeeds_when_file_exists_but_unlocked() {
     }
 
     // Should succeed and overwrite with pid line
-    acquire_store_lock(&root).unwrap();
+    let _lock = acquire_store_lock(&root).unwrap();
 
     let mut s = String::new();
     fs::File::open(&p).unwrap().read_to_string(&mut s).unwrap();
     assert!(s.starts_with("pid="), "expected pid=..., got {s:?}");
+}
+
+#[test]
+fn test_store_open_prevents_multiple_writers() {
+    let td = TempDir::new().unwrap();
+    let root = td.path();
+    let cfg = StoreConfig::default();
+
+    let store1 = Store::open(root, cfg.clone()).expect("first store open should succeed");
+
+    let err = match Store::open(root, cfg.clone()) {
+        Ok(_) => panic!("expected AlreadyOpen error"),
+        Err(err) => err,
+    };
+    match err { TvError::AlreadyOpen => {}, other => panic!("expected AlreadyOpen, got {other:?}") }
+
+    drop(store1);
+
+    Store::open(root, cfg).expect("lock should be released after Store drop");
 }

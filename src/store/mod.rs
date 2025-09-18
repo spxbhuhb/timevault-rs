@@ -15,14 +15,15 @@ pub struct Store {
     root: PathBuf,
     cfg: StoreConfig,
     partitions: RwLock<HashMap<Uuid, PartitionHandle>>,
+    _store_lock: Option<std::fs::File>,
 }
 
 impl Store {
     pub fn open(root: &Path, cfg: StoreConfig) -> Result<Store> {
         let root = root.to_path_buf();
         std::fs::create_dir_all(paths::partitions_root(&root))?;
-        if !cfg.read_only { locks::acquire_store_lock(&root)?; }
-        Ok(Store { root, cfg, partitions: RwLock::new(HashMap::new()) })
+        let _store_lock = if cfg.read_only { None } else { Some(locks::acquire_store_lock(&root)?) };
+        Ok(Store { root, cfg, partitions: RwLock::new(HashMap::new()), _store_lock })
     }
 
     pub fn open_partition(&self, partition: Uuid) -> Result<PartitionHandle> {
