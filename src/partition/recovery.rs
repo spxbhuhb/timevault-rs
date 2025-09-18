@@ -73,6 +73,8 @@ fn load_last_index_and_start(index_path: &std::path::Path, cache: &mut Partition
         cache.cur_index_block_min_order_key = ix.block_min_key;
         cache.cur_index_block_max_order_key = ix.block_max_key;
         cache.cur_index_block_size_bytes = ix.block_len_bytes;
+        cache.cur_index_block_start_off = ix.file_offset_bytes;
+        cache.cur_index_block_len_bytes = ix.block_len_bytes;
         let start_off = ix.file_offset_bytes + ix.block_len_bytes;
         return Ok((Some(ix), start_off));
     }
@@ -108,10 +110,14 @@ fn recover_tail_with_plugin_from_offset(chunk_path: &std::path::Path, start_off:
             if let Some(min_k) = first_key_in_scan { cache.cur_index_block_min_order_key = min_k; }
             if let Some(max_k) = last_key { cache.cur_index_block_max_order_key = max_k; }
             cache.cur_index_block_size_bytes = total_bytes;
+            cache.cur_index_block_start_off = start_off;
+            cache.cur_index_block_len_bytes = total_bytes;
         } else {
             // Extend indexed block
             if let Some(max_k) = last_key { cache.cur_index_block_max_order_key = max_k; }
             cache.cur_index_block_size_bytes = cache.cur_index_block_size_bytes + total_bytes;
+            cache.cur_index_block_start_off = start_off;
+            cache.cur_index_block_len_bytes = total_bytes;
         }
         cache.cur_index_block_record_count = rec_count;
         // Read last record bytes in a separate handle to avoid borrow conflicts
@@ -121,6 +127,9 @@ fn recover_tail_with_plugin_from_offset(chunk_path: &std::path::Path, start_off:
             cache.cur_last_record_bytes = Some(bytes);
         }
         if let Some(k) = last_key { cache.cur_chunk_max_order_key = cache.cur_chunk_max_order_key.max(k); }
+    } else if no_index {
+        cache.cur_index_block_start_off = start_off;
+        cache.cur_index_block_len_bytes = total_bytes;
     }
     Ok(())
 }

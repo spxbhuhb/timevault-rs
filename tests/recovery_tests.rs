@@ -5,10 +5,12 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 use uuid::Uuid;
 
+use timevault::config::IndexCfg;
+use timevault::partition::recovery::load_partition_runtime_data;
 use timevault::store::paths;
 use timevault::disk::manifest::ManifestLine;
 use timevault::disk::index::IndexLine;
-use timevault::partition::recovery::load_partition_runtime_data;
+use timevault::PartitionHandle;
 
 fn setup_partition(root: &PathBuf, id: Uuid) -> (PathBuf, PathBuf) {
     let part_dir = paths::partition_dir(root, id);
@@ -18,14 +20,16 @@ fn setup_partition(root: &PathBuf, id: Uuid) -> (PathBuf, PathBuf) {
     (part_dir, chunks_dir)
 }
 
-fn write_metadata(part_dir: &PathBuf, id: Uuid) {
+fn write_metadata(part_dir: &PathBuf, id: Uuid) { write_metadata_with_index_cfg(part_dir, id, Default::default()); }
+
+fn write_metadata_with_index_cfg(part_dir: &PathBuf, id: Uuid, index_cfg: IndexCfg) {
     use timevault::disk::metadata::MetadataJson;
     let m = MetadataJson {
         partition_id: id,
         format_version: 1,
         format_plugin: "jsonl".to_string(),
         chunk_roll: Default::default(),
-        index: Default::default(),
+        index: index_cfg,
         retention: Default::default(),
         key_is_timestamp: true,
         logical_purge: false,
@@ -158,6 +162,8 @@ fn recovery_with_index_extends_block_and_reads_last_record() {
     assert_eq!(cache.cur_index_block_max_order_key, 350);
     assert_eq!(cache.cur_index_block_record_count, 1); // only tail counted in recovery extension
     assert_eq!(cache.cur_index_block_size_bytes, block_len + tail.len() as u64);
+    assert_eq!(cache.cur_index_block_start_off, block_len);
+    assert_eq!(cache.cur_index_block_len_bytes, tail.len() as u64);
     assert_eq!(cache.cur_chunk_max_order_key, 350);
     // last_record_bytes should equal the tail line bytes
     assert_eq!(cache.cur_last_record_bytes.as_deref(), Some(tail.as_ref()));
@@ -209,10 +215,53 @@ fn recovery_two_chunks_second_has_empty_index_initializes_runtime() {
     assert_eq!(rt.cur_index_block_max_order_key, 1003);
     assert_eq!(rt.cur_index_block_size_bytes, data2.len() as u64);
     assert_eq!(rt.cur_index_block_record_count, 2);
+    assert_eq!(rt.cur_index_block_start_off, 0);
+    assert_eq!(rt.cur_index_block_len_bytes, data2.len() as u64);
     // Chunk max should be determined from scan
     assert_eq!(rt.cur_chunk_max_order_key, 1003);
     // last record bytes equals rec2b
     assert_eq!(rt.cur_last_record_bytes.as_deref(), Some(rec2b.as_ref()));
+}
+
+#[test]
+fn recovery_tail_flushes_with_expected_offset() {
+    let td = TempDir::new().unwrap();
+    let root = td.path().to_path_buf();
+    let id = Uuid::now_v7();
+    let (part_dir, chunks_dir) = setup_partition(&root, id);
+    write_metadata_with_index_cfg(&part_dir, id, IndexCfg { max_records: 1, max_hours: 0 });
+    let manifest = paths::partition_manifest(&part_dir);
+
+    let chunk_id = Uuid::now_v7();
+    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(400) });
+
+    let rec1 = b"{\"timestamp\":100}\n";
+    let rec2 = b"{\"timestamp\":200}\n";
+    let tail = b"{\"timestamp\":350}\n";
+    let mut chunk = Vec::new(); chunk.extend_from_slice(rec1); chunk.extend_from_slice(rec2); chunk.extend_from_slice(tail);
+    write_chunk(&chunks_dir, chunk_id, &chunk);
+
+    let block_len = (rec1.len() + rec2.len()) as u64;
+    let idx = vec![idx_line(100, 200, 0, block_len)];
+    write_index(&chunks_dir, chunk_id, &idx);
+
+    let meta_path = paths::partition_metadata(&part_dir);
+    let m = timevault::disk::metadata::load_metadata(&meta_path).unwrap();
+    let cache = load_partition_runtime_data(&root, id, &m).unwrap();
+    assert_eq!(cache.cur_index_block_start_off, block_len);
+    assert_eq!(cache.cur_index_block_len_bytes, tail.len() as u64);
+
+    let handle = PartitionHandle::open(root.clone(), id).unwrap();
+    let new_rec = b"{\"timestamp\":400}\n";
+    handle.append(400, new_rec).unwrap();
+
+    let idx_path = paths::index_file(&chunks_dir, chunk_id);
+    let f = File::open(&idx_path).unwrap();
+    let lines = timevault::disk::index::load_index_lines(&f).unwrap();
+    assert_eq!(lines.len(), 2);
+    let last = lines.last().unwrap();
+    assert_eq!(last.file_offset_bytes, block_len);
+    assert_eq!(last.block_len_bytes, (tail.len() + new_rec.len()) as u64);
 }
 
 #[test]
