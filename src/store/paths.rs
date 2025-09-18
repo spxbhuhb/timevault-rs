@@ -16,6 +16,9 @@ pub fn chunks_dir(part_dir: &Path) -> PathBuf { part_dir.join("chunks") }
 pub fn tmp_dir(part_dir: &Path) -> PathBuf { part_dir.join("tmp") }
 pub fn gc_dir(part_dir: &Path) -> PathBuf { part_dir.join("gc") }
 
+pub fn raft_vote_file(part_dir: &Path) -> PathBuf { part_dir.join("raft_vote.json") }
+pub fn raft_purge_file(part_dir: &Path) -> PathBuf { part_dir.join("raft_purge.json") }
+
 pub fn chunk_file(chunks_dir: &Path, chunk_id: Uuid) -> PathBuf { chunks_dir.join(format!("{}.chunk", chunk_id)) }
 pub fn index_file(chunks_dir: &Path, chunk_id: Uuid) -> PathBuf { chunks_dir.join(format!("{}.index", chunk_id)) }
 

@@ -2,6 +2,8 @@ pub mod open;
 pub mod paths;
 pub mod locks;
 pub mod fsync;
+#[cfg(feature = "openraft-adapter")]
+pub mod openraft_adapter;
 
 use crate::config::StoreConfig;
 use crate::errors::{Result};

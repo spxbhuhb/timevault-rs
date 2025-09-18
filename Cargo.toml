@@ -15,6 +15,7 @@ maintenance = { status = "experimental" }
 [features]
 default = []
 stress-tests = []
+openraft-adapter = ["dep:openraft", "dep:async-trait"]
 
 [dependencies]
 thiserror = "1"
@@ -26,3 +27,8 @@ parking_lot = "0.12"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 tempfile = "3"
 memchr = "2"
+openraft = { version = "0.9.21", default-features = false, features = ["serde"], optional = true }
+async-trait = { version = "0.1", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt","rt-multi-thread"] }
