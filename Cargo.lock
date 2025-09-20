@@ -251,7 +251,6 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
- "serde",
  "wasm-bindgen",
  "windows-link 0.2.0",
 ]
@@ -1108,7 +1107,6 @@ name = "timevault"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
  "fs2",
  "memchr",
  "openraft",

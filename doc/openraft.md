@@ -22,10 +22,26 @@ a format plugin is required.
 
 - Serialization format:
   - Use the existing `jsonl` plugin (newline-delimited JSON). Each log record should contain at least:
-    - `log_id`: `{ index: u64, term: u64, node_id: NodeId }`
+    - `log_id`: `{ index: u64, term: u64, node_id: uuid::Uuid }`
     - `payload`: the OpenRaft entry payload (serde-serializable)
     - Optionally, any metadata OpenRaft requires to reconstruct `LogId` reliably
   - The adapter’s `encode` should ensure a trailing newline to match the scanner.
+
+## Implementation details
+
+- Module name: `raft`
+- Required feature: none, the module is included by default
+- Adapter struct name: `RaftLogAdapter`
+  - implements both `RaftLogStorage` and `RaftLogReader`
+  - contains all necessary data for the adapter to operate
+- Define `RaftTypeConfig` with these types:
+  - `D`: `Request(serde_json::Value)` (define the struct Request)
+  - `R`: `Response(Result<serde_json::Value, serde_json::Value>)` (define the struct Response)
+  - `NodeId`: `uuid::Uuid`
+  - `Node`: `BasicNode`
+  - `SnapshotData`: `Cursor<Vec<u8>>`
+  - `AsyncRuntime` : `TokioRuntime`
+- for `LogFlushed` use `openraft::storage::LogFlushed`
 
 ## Synchronization
 
