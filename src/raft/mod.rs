@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::PartitionHandle;
+use crate::errors::TvError;
 use crate::partition::read::read_range_blocks;
 use crate::store::paths;
 
@@ -47,25 +48,20 @@ pub struct TvrLogAdapter {
     thread_handle: Option<thread::JoinHandle<()>>,
 }
 
-#[derive(Debug)]
-enum TvRaftError {
-    Tv(crate::errors::TvError)
-}
-
 enum Op {
     // list of (order_key=index, encoded)
     Append(Vec<(u64, Vec<u8>)>, LogFlushed<TvConfig>),
-    Read(u64, u64, Sender<Result<Vec<u8>, TvRaftError>>),
-    Truncate(u64, Sender<Result<(), TvRaftError>>),
-    Purge(LogId<Uuid>, Sender<Result<(), TvRaftError>>),
-    GetState(Sender<Result<LogState<TvConfig>, TvRaftError>>),
-    SaveVote(Vote<Uuid>, Sender<Result<(), TvRaftError>>),
-    ReadVote(Sender<Result<Option<Vote<Uuid>>, TvRaftError>>),
+    Read(u64, u64, Sender<Result<Vec<u8>, TvError>>),
+    Truncate(u64, Sender<Result<(), TvError>>),
+    Purge(LogId<Uuid>, Sender<Result<(), TvError>>),
+    GetState(Sender<Result<LogState<TvConfig>, TvError>>),
+    SaveVote(Vote<Uuid>, Sender<Result<(), TvError>>),
+    ReadVote(Sender<Result<Option<Vote<Uuid>>, TvError>>),
     Shutdown,
 }
 
 impl TvrLogAdapter {
-    
+
     pub fn new(part: PartitionHandle, node_id: Uuid) -> Self {
         let cfg = part.cfg();
         if cfg.format_plugin != "jsonl" {
@@ -103,27 +99,27 @@ impl TvrLogAdapter {
                     }
                 }
                 Op::Read(a, b, tx) => {
-                    let r = read_range_blocks(&part, a, b).map_err(TvRaftError::Tv);
+                    let r = read_range_blocks(&part, a, b);
                     tx.send(r).expect("bg_loop: failed to send Read response");
                 }
                 Op::Truncate(idx, tx) => {
-                    let r = part.truncate(idx).map_err(TvRaftError::Tv);
+                    let r = part.truncate(idx);
                     tx.send(r).expect("bg_loop: failed to send Truncate response");
                 }
                 Op::Purge(id, tx) => {
-                    let r = purge_with_persist(&part, &id).map_err(TvRaftError::Tv);
+                    let r = purge_with_persist(&part, &id);
                     tx.send(r).expect("bg_loop: failed to send Purge response");
                 }
                 Op::GetState(tx) => {
-                    let r = get_state(&part).map_err(TvRaftError::Tv);
+                    let r = get_state(&part);
                     tx.send(r).expect("bg_loop: failed to send GetState response");
                 }
                 Op::SaveVote(v, tx) => {
-                    let r = save_vote_file(&part, &v).map_err(TvRaftError::Tv);
+                    let r = save_vote_file(&part, &v);
                     tx.send(r).expect("bg_loop: failed to send SaveVote response");
                 }
                 Op::ReadVote(tx) => {
-                    let r = read_vote_file(&part).map_err(TvRaftError::Tv);
+                    let r = read_vote_file(&part);
                     tx.send(r).expect("bg_loop: failed to send ReadVote response");
                 }
                 Op::Shutdown => break,
@@ -161,38 +157,34 @@ fn map_send_err<E: std::fmt::Display>(
     se_new(subject, verb, &e.to_string())
 }
 
-fn map_tvraft_err(
-    e: TvRaftError,
+fn map_tv_err(
+    e: TvError,
     subject: ErrorSubject<Uuid>,
     verb: ErrorVerb,
 ) -> StorageError<Uuid> {
-    match e {
-        TvRaftError::Tv(te) => {
-            StorageError::from(StorageIOError::new(subject, verb, AnyError::new(&te)))
-        }
-    }
+    StorageError::from(StorageIOError::new(subject, verb, AnyError::new(&e)))
 }
 
 fn recv_map<T>(
-    rrx: Receiver<Result<T, TvRaftError>>,
+    rrx: Receiver<Result<T, TvError>>,
     subject: ErrorSubject<Uuid>,
     verb: ErrorVerb,
 ) -> Result<T, StorageError<Uuid>> {
     let rsp = rrx
         .recv()
         .map_err(|e| map_send_err(subject.clone(), verb.clone(), e))?;
-    rsp.map_err(|e| map_tvraft_err(e, subject, verb))
+    rsp.map_err(|e| map_tv_err(e, subject, verb))
 }
 
-fn recv_unit(
-    rrx: Receiver<Result<(), TvRaftError>>,
+pub(crate) fn recv_unit(
+    rrx: Receiver<Result<(), TvError>>,
     subject: ErrorSubject<Uuid>,
     verb: ErrorVerb,
 ) -> Result<(), StorageError<Uuid>> {
     recv_map(rrx, subject, verb)
 }
 
-fn encode_entry(e: &Entry<TvConfig>) -> Vec<u8> {
+pub(crate) fn encode_entry(e: &Entry<TvConfig>) -> Vec<u8> {
     let (kind, val) = match &e.payload {
         EntryPayload::Blank => ("Blank".to_string(), serde_json::Value::Null),
         EntryPayload::Normal(r) => ("Normal".to_string(), r.0.clone()),
@@ -212,7 +204,7 @@ fn encode_entry(e: &Entry<TvConfig>) -> Vec<u8> {
     out
 }
 
-fn decode_entries(buf: &[u8], range: std::ops::RangeInclusive<u64>) -> Vec<Entry<TvConfig>> {
+pub(crate) fn decode_entries(buf: &[u8], range: std::ops::RangeInclusive<u64>) -> Vec<Entry<TvConfig>> {
     let plugin = match crate::plugins::resolve_plugin("jsonl") {
         Ok(p) => p,
         Err(_) => return Vec::new(),
@@ -248,7 +240,7 @@ fn decode_entries(buf: &[u8], range: std::ops::RangeInclusive<u64>) -> Vec<Entry
     out
 }
 
-fn get_state(part: &PartitionHandle) -> Result<LogState<TvConfig>, crate::errors::TvError> {
+pub(crate) fn get_state(part: &PartitionHandle) -> Result<LogState<TvConfig>, crate::errors::TvError> {
     // Recover last_purge
     let purge = read_purge_file(part).ok().flatten();
     // Read last record bytes from runtime cache if any
@@ -264,20 +256,17 @@ fn get_state(part: &PartitionHandle) -> Result<LogState<TvConfig>, crate::errors
     })
 }
 
-fn purge_with_persist(
-    part: &PartitionHandle,
-    id: &LogId<Uuid>,
-) -> Result<(), crate::errors::TvError> {
+pub(crate) fn purge_with_persist(part: &PartitionHandle, id: &LogId<Uuid>) -> Result<(), crate::errors::TvError> {
     save_purge_file(part, id)?;
     part.purge(id.index)
 }
 
-fn save_vote_file(part: &PartitionHandle, v: &Vote<Uuid>) -> Result<(), crate::errors::TvError> {
+pub(crate) fn save_vote_file(part: &PartitionHandle, v: &Vote<Uuid>) -> Result<(), crate::errors::TvError> {
     let part_dir = paths::partition_dir(part.root(), part.id());
     crate::disk::atomic::atomic_write_json(paths::raft_vote_file(&part_dir), v)
 }
 
-fn read_vote_file(part: &PartitionHandle) -> Result<Option<Vote<Uuid>>, crate::errors::TvError> {
+pub(crate) fn read_vote_file(part: &PartitionHandle) -> Result<Option<Vote<Uuid>>, crate::errors::TvError> {
     let part_dir = paths::partition_dir(part.root(), part.id());
     let p = paths::raft_vote_file(&part_dir);
     if !p.exists() {
@@ -292,7 +281,7 @@ struct PurgeFile {
     last_deleted: LogId<Uuid>,
 }
 
-fn save_purge_file(part: &PartitionHandle, id: &LogId<Uuid>) -> Result<(), crate::errors::TvError> {
+pub(crate) fn save_purge_file(part: &PartitionHandle, id: &LogId<Uuid>) -> Result<(), crate::errors::TvError> {
     let part_dir = paths::partition_dir(part.root(), part.id());
     crate::disk::atomic::atomic_write_json(
         paths::raft_purge_file(&part_dir),
@@ -302,7 +291,7 @@ fn save_purge_file(part: &PartitionHandle, id: &LogId<Uuid>) -> Result<(), crate
     )
 }
 
-fn read_purge_file(part: &PartitionHandle) -> Result<Option<LogId<Uuid>>, crate::errors::TvError> {
+pub(crate) fn read_purge_file(part: &PartitionHandle) -> Result<Option<LogId<Uuid>>, crate::errors::TvError> {
     let part_dir = paths::partition_dir(part.root(), part.id());
     let p = paths::raft_purge_file(&part_dir);
     if !p.exists() {
@@ -418,12 +407,5 @@ impl Clone for TvrLogAdapter {
     }
 }
 
-
-// Test helpers exposed for integration tests
-pub fn decode_entries_for_tests(buf: &[u8], range: std::ops::RangeInclusive<u64>) -> Vec<Entry<TvConfig>> {
-    decode_entries(buf, range)
-}
-
-pub fn read_purge_file_for_tests(part: &PartitionHandle) -> Result<Option<LogId<Uuid>>, crate::errors::TvError> {
-    read_purge_file(part)
-}
+#[cfg(test)]
+mod tests;
