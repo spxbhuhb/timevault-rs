@@ -31,7 +31,7 @@ a format plugin is required.
 
 - Module name: `raft`
 - Required feature: none, the module is included by default
-- Adapter struct name: `RaftLogAdapter`
+- Adapter struct name: `TvrLogAdapter`
   - implements both `RaftLogStorage` and `RaftLogReader`
   - contains all necessary data for the adapter to operate
 - Define `RaftTypeConfig` with these types:
