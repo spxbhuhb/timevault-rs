@@ -1,4 +1,3 @@
-use super::*;
 use crate::PartitionHandle;
 use crate::config::PartitionConfig;
 use crate::store::paths;
@@ -12,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::channel;
 use tempfile::TempDir;
 use uuid::Uuid;
+use crate::raft::storage::*;
 
 fn mk_partition(tmp: &TempDir) -> PartitionHandle {
     let root = tmp.path().to_path_buf();
