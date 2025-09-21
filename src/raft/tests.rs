@@ -9,6 +9,7 @@ use openraft::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::channel;
+use std::sync::Mutex;
 use openraft::testing::{StoreBuilder, Suite};
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -220,11 +221,20 @@ async fn test_empty_partition_state_and_reads() {
     assert!(!paths::purge_file(&part).exists());
 }
 
-struct TvrStoreBuilder {}
+struct TvrStoreBuilder {
+    tempdirs: Mutex<Vec<TempDir>>,
+}
+
+impl Default for TvrStoreBuilder {
+    fn default() -> Self {
+        Self { tempdirs: Mutex::new(Vec::new()) }
+    }
+}
 
 impl StoreBuilder<TvrConfig, TvrLogAdapter, TvrPartitionStateMachine, ()> for TvrStoreBuilder {
     async fn build(&self) -> Result<((), TvrLogAdapter,TvrPartitionStateMachine), StorageError<TvrNodeId>> {
-        let (_tmp, part) = mk_partition_owned();
+        let (tmp, part) = mk_partition_owned();
+        self.tempdirs.lock().unwrap().push(tmp);
         let node_id = 1;
         let log = TvrLogAdapter::new(part.clone(), node_id);
         let state = TvrPartitionStateMachine::new(part.clone())?;
@@ -234,6 +244,6 @@ impl StoreBuilder<TvrConfig, TvrLogAdapter, TvrPartitionStateMachine, ()> for Tv
 
 #[test]
 pub fn test_mem_store() -> Result<(), StorageError<TvrNodeId>> {
-    Suite::test_all(TvrStoreBuilder {})?;
+    Suite::test_all(TvrStoreBuilder::default())?;
     Ok(())
 }
