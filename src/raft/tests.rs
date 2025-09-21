@@ -1,7 +1,7 @@
 use crate::PartitionHandle;
 use crate::config::PartitionConfig;
-use crate::raft::paths;
-use openraft::RaftLogReader;
+use crate::raft::{paths, TvrConfig, TvrNodeId};
+use openraft::{RaftLogReader, StorageError};
 use openraft::storage::RaftLogStorage;
 use openraft::{
     BasicNode, CommittedLeaderId, Entry, EntryPayload, ErrorSubject, ErrorVerb, LogId, Membership,
@@ -9,11 +9,13 @@ use openraft::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::channel;
+use openraft::testing::{StoreBuilder, Suite};
 use tempfile::TempDir;
 use uuid::Uuid;
 use crate::raft::TvrRequest;
-use crate::raft::storage::*;
+use crate::raft::log::*;
 use crate::raft::errors::recv_unit;
+use crate::raft::state::TvrPartitionStateMachine;
 
 fn mk_partition(tmp: &TempDir) -> PartitionHandle {
     let root = tmp.path().to_path_buf();
@@ -23,27 +25,25 @@ fn mk_partition(tmp: &TempDir) -> PartitionHandle {
     PartitionHandle::create(root, id, cfg).expect("create partition")
 }
 
-fn mk_uuid(n: u128) -> Uuid {
-    Uuid::from_u128(n)
-}
+fn mk_nodeid(n: u64) -> u64 { n }
 
-fn mk_log_id(term: u64, node: Uuid, index: u64) -> LogId<Uuid> {
+fn mk_log_id(term: u64, node: TvrNodeId, index: u64) -> LogId<TvrNodeId> {
     LogId::new(CommittedLeaderId::new(term, node), index)
 }
 
 fn mk_partition_owned() -> (TempDir, PartitionHandle) {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
-    let id = mk_uuid(0xA5);
+    let id = mk_nodeid(0xA5);
     let mut cfg = PartitionConfig::default();
     cfg.format_plugin = "jsonl".to_string();
-    let part = PartitionHandle::create(root, id, cfg).unwrap();
+    let part = PartitionHandle::create(root, Uuid::from_u128(id as u128), cfg).unwrap();
     (tmp, part)
 }
 
 #[test]
 fn test_encode_entry_roundtrip_fields() {
-    let node = mk_uuid(0xB0);
+    let node = mk_nodeid(0xB0);
     let log_id = mk_log_id(3, node, 7);
     let payload = serde_json::json!({"value": 42});
     let entry = Entry {
@@ -66,7 +66,7 @@ fn test_encode_entry_roundtrip_fields() {
 
 #[test]
 fn test_decode_entries_handles_membership_and_filters() {
-    let node = mk_uuid(0xC1);
+    let node = mk_nodeid(0xC1);
     let log_id1 = mk_log_id(1, node, 5);
     let log_id2 = mk_log_id(1, node, 6);
     let mut members = BTreeMap::new();
@@ -118,7 +118,7 @@ fn test_recv_map_error_paths() {
 #[test]
 fn test_vote_and_purge_persistence_helpers() {
     let (_tmp, part) = mk_partition_owned();
-    let node = mk_uuid(0xD2);
+    let node = mk_nodeid(0xD2);
     let vote = Vote::new(2, node);
     save_vote_file(&part, &vote).unwrap();
     let loaded = read_vote_file(&part).unwrap();
@@ -134,7 +134,7 @@ fn test_vote_and_purge_persistence_helpers() {
 #[test]
 fn test_get_state_reports_last_ids() {
     let (_tmp, part) = mk_partition_owned();
-    let node = mk_uuid(0xE3);
+    let node = mk_nodeid(0xE3);
     let log_id1 = mk_log_id(1, node, 1);
     let log_id2 = mk_log_id(2, node, 2);
     let entries = [
@@ -161,22 +161,21 @@ fn test_get_state_reports_last_ids() {
 #[test]
 fn test_decode_entries_roundtrip_and_filter() {
     // Build 3 records manually in jsonl with kind field
-    let nid = Uuid::nil();
     let l1 = serde_json::json!({
         "timestamp": 1,
-        "log_id": {"leader_id": {"term": 1, "node_id": nid}, "index": 1},
+        "log_id": {"leader_id": {"term": 1, "node_id": 1}, "index": 1},
         "kind": "Normal",
         "payload": {"a":1}
     });
     let l2 = serde_json::json!({
         "timestamp": 2,
-        "log_id": {"leader_id": {"term": 1, "node_id": nid}, "index": 2},
+        "log_id": {"leader_id": {"term": 1, "node_id": 2}, "index": 2},
         "kind": "Normal",
         "payload": {"b":2}
     });
     let l3 = serde_json::json!({
         "timestamp": 3,
-        "log_id": {"leader_id": {"term": 2, "node_id": nid}, "index": 3},
+        "log_id": {"leader_id": {"term": 2, "node_id": 3}, "index": 3},
         "kind": "Normal",
         "payload": {"c":3}
     });
@@ -201,8 +200,7 @@ fn test_decode_entries_roundtrip_and_filter() {
 async fn test_empty_partition_state_and_reads() {
     let td = TempDir::new().unwrap();
     let part = mk_partition(&td);
-    let nid = Uuid::nil();
-    let mut ad = TvrLogAdapter::new(part.clone(), nid);
+    let mut ad = TvrLogAdapter::new(part.clone(), 1);
 
     let st = ad.get_log_state().await.expect("get_log_state");
     assert!(st.last_log_id.is_none());
@@ -220,4 +218,22 @@ async fn test_empty_partition_state_and_reads() {
 
     assert!(!paths::vote_file(&part).exists());
     assert!(!paths::purge_file(&part).exists());
+}
+
+struct TvrStoreBuilder {}
+
+impl StoreBuilder<TvrConfig, TvrLogAdapter, TvrPartitionStateMachine, ()> for TvrStoreBuilder {
+    async fn build(&self) -> Result<((), TvrLogAdapter,TvrPartitionStateMachine), StorageError<TvrNodeId>> {
+        let (_tmp, part) = mk_partition_owned();
+        let node_id = 1;
+        let log = TvrLogAdapter::new(part.clone(), node_id);
+        let state = TvrPartitionStateMachine::new(part.clone())?;
+        Ok(((), log, state))
+    }
+}
+
+#[test]
+pub fn test_mem_store() -> Result<(), StorageError<TvrNodeId>> {
+    Suite::test_all(TvrStoreBuilder {})?;
+    Ok(())
 }

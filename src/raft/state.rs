@@ -29,8 +29,9 @@ pub struct StoredSnapshot {
     pub data: Vec<u8>,
 }
 
+/// Stores all requests in a timevault partition.
 #[derive(Clone,Debug)]
-pub struct StateMachineStore {
+pub struct TvrPartitionStateMachine {
 
     pub partition_handle: PartitionHandle,
 
@@ -51,7 +52,7 @@ pub struct StateMachineData {
     // State built from applying the raft logs
 }
 
-impl RaftSnapshotBuilder<TvrConfig> for StateMachineStore {
+impl RaftSnapshotBuilder<TvrConfig> for TvrPartitionStateMachine {
     async fn build_snapshot(&mut self) -> Result<Snapshot<TvrConfig>, StorageError<TvrNodeId>> {
         let last_applied_log = self.data.last_applied_log_id;
         let last_membership = self.data.last_membership.clone();
@@ -84,9 +85,9 @@ impl RaftSnapshotBuilder<TvrConfig> for StateMachineStore {
     }
 }
 
-impl StateMachineStore {
+impl TvrPartitionStateMachine {
 
-    async fn new(partition_handle: PartitionHandle) -> Result<StateMachineStore, StorageError<TvrNodeId>> {
+    pub(crate) fn new(partition_handle: PartitionHandle) -> Result<TvrPartitionStateMachine, StorageError<TvrNodeId>> {
         let mut sm = Self {
             partition_handle,
             data: StateMachineData {
@@ -98,13 +99,13 @@ impl StateMachineStore {
 
         let snapshot = sm.get_current_snapshot_()?;
         if let Some(snap) = snapshot {
-            sm.update_state_machine_(snap).await?;
+            sm.update_state_machine_(snap)?;
         }
 
         Ok(sm)
     }
 
-    async fn update_state_machine_(
+    fn update_state_machine_(
         &mut self,
         snapshot: StoredSnapshot,
     ) -> Result<(), StorageError<TvrNodeId>> {
@@ -142,7 +143,7 @@ impl StateMachineStore {
     }
 }
 
-impl RaftStateMachine<TvrConfig> for StateMachineStore {
+impl RaftStateMachine<TvrConfig> for TvrPartitionStateMachine {
     type SnapshotBuilder = Self;
 
     async fn applied_state(
@@ -175,7 +176,7 @@ impl RaftStateMachine<TvrConfig> for StateMachineStore {
 
             match ent.payload {
                 EntryPayload::Blank => {}
-                EntryPayload::Normal(req) => {} // match req {
+                EntryPayload::Normal(_req) => {} // match req {
                     // TvrRequest::Set { key, value } => {
                     //     resp_value = Some(value.clone());
                     //
@@ -215,7 +216,7 @@ impl RaftStateMachine<TvrConfig> for StateMachineStore {
             data: snapshot.into_inner(),
         };
 
-        self.update_state_machine_(new_snapshot.clone()).await?;
+        self.update_state_machine_(new_snapshot.clone())?;
 
         self.set_current_snapshot_(new_snapshot)?;
 

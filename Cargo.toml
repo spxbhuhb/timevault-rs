@@ -29,3 +29,6 @@ uuid = { version = "1", features = ["v7", "serde"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt","rt-multi-thread"] }
+
+[env]
+RUST_BACKTRACE = "1"

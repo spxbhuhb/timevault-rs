@@ -4,48 +4,49 @@ use std::thread;
 
 use openraft::storage::{LogFlushed, RaftLogStorage};
 use openraft::{
-    AnyError, Entry, EntryPayload, ErrorSubject, ErrorVerb, LogId, LogState,
-    RaftLogReader, StorageError, StorageIOError, Vote,
+    Entry, EntryPayload, ErrorSubject, ErrorVerb, LogId, LogState,
+    RaftLogReader, StorageError, Vote,
 };
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use crate::disk::atomic::atomic_write_json;
 use crate::PartitionHandle;
 use crate::errors::TvError;
 use crate::partition::read::read_range_blocks;
-use crate::raft::{TvrRequest, TvrConfig};
+use crate::raft::{TvrRequest, TvrConfig, TvrNodeId};
 use crate::raft::paths;
+use crate::raft::errors::{map_send_err, recv_map, recv_unit};
 
 #[derive(Serialize, Deserialize)]
 struct JsonlRecord {
     timestamp: i64,
-    log_id: LogId<Uuid>,
+    log_id: LogId<TvrNodeId>,
     kind: String,
     payload: serde_json::Value,
 }
 
-pub struct TvrLogAdapter {
-    part: PartitionHandle,
-    node_id: Uuid,
-    tx: SyncSender<Op>,
-    thread_handle: Option<thread::JoinHandle<()>>,
-}
 
 enum Op {
     // list of (order_key=index, encoded)
     Append(Vec<(u64, Vec<u8>)>, LogFlushed<TvrConfig>),
     Read(u64, u64, Sender<Result<Vec<u8>, TvError>>),
     Truncate(u64, Sender<Result<(), TvError>>),
-    Purge(LogId<Uuid>, Sender<Result<(), TvError>>),
+    Purge(LogId<TvrNodeId>, Sender<Result<(), TvError>>),
     GetState(Sender<Result<LogState<TvrConfig>, TvError>>),
-    SaveVote(Vote<Uuid>, Sender<Result<(), TvError>>),
-    ReadVote(Sender<Result<Option<Vote<Uuid>>, TvError>>),
+    SaveVote(Vote<TvrNodeId>, Sender<Result<(), TvError>>),
+    ReadVote(Sender<Result<Option<Vote<TvrNodeId>>, TvError>>),
     Shutdown,
+}
+
+pub struct TvrLogAdapter {
+    part: PartitionHandle,
+    node_id: TvrNodeId,
+    tx: SyncSender<Op>,
+    thread_handle: Option<thread::JoinHandle<()>>,
 }
 
 impl TvrLogAdapter {
 
-    pub fn new(part: PartitionHandle, node_id: Uuid) -> Self {
+    pub fn new(part: PartitionHandle, node_id: TvrNodeId) -> Self {
         let cfg = part.cfg();
         if cfg.format_plugin != "jsonl" {
             panic!("Only jsonl format is supported for now.");
@@ -120,8 +121,16 @@ impl Drop for TvrLogAdapter {
     }
 }
 
-// ---------- Error mapping helpers moved to raft::errors ----------
-use crate::raft::errors::{se_new, map_send_err, map_tv_err, recv_map, recv_unit};
+impl Clone for TvrLogAdapter {
+    fn clone(&self) -> Self {
+        Self {
+            part: self.part.clone(),
+            node_id: self.node_id.clone(),
+            tx: self.tx.clone(),
+            thread_handle: None,
+        }
+    }
+}
 
 pub(crate) fn encode_entry(e: &Entry<TvrConfig>) -> Vec<u8> {
     let (kind, val) = match &e.payload {
@@ -195,16 +204,16 @@ pub(crate) fn get_state(part: &PartitionHandle) -> Result<LogState<TvrConfig>, c
     })
 }
 
-pub(crate) fn purge_with_persist(part: &PartitionHandle, id: &LogId<Uuid>) -> Result<(), crate::errors::TvError> {
+pub(crate) fn purge_with_persist(part: &PartitionHandle, id: &LogId<TvrNodeId>) -> Result<(), crate::errors::TvError> {
     save_purge_file(part, id)?;
     part.purge(id.index)
 }
 
-pub(crate) fn save_vote_file(part: &PartitionHandle, v: &Vote<Uuid>) -> Result<(), crate::errors::TvError> {
+pub(crate) fn save_vote_file(part: &PartitionHandle, v: &Vote<TvrNodeId>) -> Result<(), crate::errors::TvError> {
     atomic_write_json(paths::vote_file(part), v)
 }
 
-pub(crate) fn read_vote_file(part: &PartitionHandle) -> Result<Option<Vote<Uuid>>, crate::errors::TvError> {
+pub(crate) fn read_vote_file(part: &PartitionHandle) -> Result<Option<Vote<TvrNodeId>>, crate::errors::TvError> {
     let p = paths::vote_file(&part);
     if !p.exists() {
         return Ok(None);
@@ -215,10 +224,10 @@ pub(crate) fn read_vote_file(part: &PartitionHandle) -> Result<Option<Vote<Uuid>
 
 #[derive(Serialize, Deserialize)]
 struct PurgeFile {
-    last_deleted: LogId<Uuid>,
+    last_deleted: LogId<TvrNodeId>,
 }
 
-pub(crate) fn save_purge_file(part: &PartitionHandle, id: &LogId<Uuid>) -> Result<(), crate::errors::TvError> {
+pub(crate) fn save_purge_file(part: &PartitionHandle, id: &LogId<TvrNodeId>) -> Result<(), crate::errors::TvError> {
     atomic_write_json(
         paths::purge_file(&part),
         &PurgeFile {
@@ -227,7 +236,7 @@ pub(crate) fn save_purge_file(part: &PartitionHandle, id: &LogId<Uuid>) -> Resul
     )
 }
 
-pub(crate) fn read_purge_file(part: &PartitionHandle) -> Result<Option<LogId<Uuid>>, crate::errors::TvError> {
+pub(crate) fn read_purge_file(part: &PartitionHandle) -> Result<Option<LogId<TvrNodeId>>, crate::errors::TvError> {
     let p = paths::purge_file(&part);
     if !p.exists() {
         return Ok(None);
@@ -241,7 +250,7 @@ impl RaftLogReader<TvrConfig> for TvrLogAdapter {
     async fn try_get_log_entries<RB: std::ops::RangeBounds<u64> + Send>(
         &mut self,
         range: RB,
-    ) -> Result<Vec<Entry<TvrConfig>>, StorageError<Uuid>> {
+    ) -> Result<Vec<Entry<TvrConfig>>, StorageError<TvrNodeId>> {
         use std::ops::Bound::*;
         let start = match range.start_bound() {
             Included(a) => *a,
@@ -265,7 +274,7 @@ impl RaftLogReader<TvrConfig> for TvrLogAdapter {
 impl RaftLogStorage<TvrConfig> for TvrLogAdapter {
     type LogReader = Self;
 
-    async fn get_log_state(&mut self) -> Result<LogState<TvrConfig>, StorageError<Uuid>> {
+    async fn get_log_state(&mut self) -> Result<LogState<TvrConfig>, StorageError<TvrNodeId>> {
         let (rtx, rrx) = channel();
         self.tx
             .send(Op::GetState(rtx))
@@ -277,7 +286,7 @@ impl RaftLogStorage<TvrConfig> for TvrLogAdapter {
         self.clone()
     }
 
-    async fn save_vote(&mut self, vote: &Vote<Uuid>) -> Result<(), StorageError<Uuid>> {
+    async fn save_vote(&mut self, vote: &Vote<TvrNodeId>) -> Result<(), StorageError<TvrNodeId>> {
         let (rtx, rrx) = channel();
         self.tx
             .send(Op::SaveVote(vote.clone(), rtx))
@@ -285,7 +294,7 @@ impl RaftLogStorage<TvrConfig> for TvrLogAdapter {
         recv_unit(rrx, ErrorSubject::Vote, ErrorVerb::Write)
     }
 
-    async fn read_vote(&mut self) -> Result<Option<Vote<Uuid>>, StorageError<Uuid>> {
+    async fn read_vote(&mut self) -> Result<Option<Vote<TvrNodeId>>, StorageError<TvrNodeId>> {
         let (rtx, rrx) = channel();
         self.tx
             .send(Op::ReadVote(rtx))
@@ -297,7 +306,7 @@ impl RaftLogStorage<TvrConfig> for TvrLogAdapter {
         &mut self,
         entries: I,
         callback: LogFlushed<TvrConfig>,
-    ) -> Result<(), StorageError<Uuid>>
+    ) -> Result<(), StorageError<TvrNodeId>>
     where
         I: IntoIterator<Item = Entry<TvrConfig>> + openraft::OptionalSend,
         I::IntoIter: openraft::OptionalSend,
@@ -314,7 +323,7 @@ impl RaftLogStorage<TvrConfig> for TvrLogAdapter {
         Ok(())
     }
 
-    async fn truncate(&mut self, log_id: LogId<Uuid>) -> Result<(), StorageError<Uuid>> {
+    async fn truncate(&mut self, log_id: LogId<TvrNodeId>) -> Result<(), StorageError<TvrNodeId>> {
         let (rtx, rrx) = channel();
         self.tx
             .send(Op::Truncate(log_id.index, rtx))
@@ -322,22 +331,11 @@ impl RaftLogStorage<TvrConfig> for TvrLogAdapter {
         recv_unit(rrx, ErrorSubject::Logs, ErrorVerb::Write)
     }
 
-    async fn purge(&mut self, log_id: LogId<Uuid>) -> Result<(), StorageError<Uuid>> {
+    async fn purge(&mut self, log_id: LogId<TvrNodeId>) -> Result<(), StorageError<TvrNodeId>> {
         let (rtx, rrx) = channel();
         self.tx
             .send(Op::Purge(log_id, rtx))
             .map_err(|e| map_send_err(ErrorSubject::Store, ErrorVerb::Write, e))?;
         recv_unit(rrx, ErrorSubject::Store, ErrorVerb::Write)
-    }
-}
-
-impl Clone for TvrLogAdapter {
-    fn clone(&self) -> Self {
-        Self {
-            part: self.part.clone(),
-            node_id: self.node_id.clone(),
-            tx: self.tx.clone(),
-            thread_handle: None,
-        }
     }
 }
