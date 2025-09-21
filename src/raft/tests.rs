@@ -1,0 +1,223 @@
+use super::*;
+use crate::PartitionHandle;
+use crate::config::PartitionConfig;
+use crate::store::paths;
+use openraft::RaftLogReader;
+use openraft::storage::RaftLogStorage;
+use openraft::{
+    BasicNode, CommittedLeaderId, Entry, EntryPayload, ErrorSubject, ErrorVerb, LogId, Membership,
+    Vote,
+};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::mpsc::channel;
+use tempfile::TempDir;
+use uuid::Uuid;
+
+fn mk_partition(tmp: &TempDir) -> PartitionHandle {
+    let root = tmp.path().to_path_buf();
+    let id = Uuid::nil();
+    let mut cfg = PartitionConfig::default();
+    cfg.format_plugin = "jsonl".to_string();
+    PartitionHandle::create(root, id, cfg).expect("create partition")
+}
+
+fn mk_uuid(n: u128) -> Uuid {
+    Uuid::from_u128(n)
+}
+
+fn mk_log_id(term: u64, node: Uuid, index: u64) -> LogId<Uuid> {
+    LogId::new(CommittedLeaderId::new(term, node), index)
+}
+
+fn mk_partition_owned() -> (TempDir, PartitionHandle) {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let id = mk_uuid(0xA5);
+    let mut cfg = PartitionConfig::default();
+    cfg.format_plugin = "jsonl".to_string();
+    let part = PartitionHandle::create(root, id, cfg).unwrap();
+    (tmp, part)
+}
+
+#[test]
+fn test_encode_entry_roundtrip_fields() {
+    let node = mk_uuid(0xB0);
+    let log_id = mk_log_id(3, node, 7);
+    let payload = serde_json::json!({"value": 42});
+    let entry = Entry {
+        log_id,
+        payload: EntryPayload::Normal(Request(payload.clone())),
+    };
+
+    let buf = encode_entry(&entry);
+    assert!(buf.ends_with(b"\n"));
+
+    let record: serde_json::Value = serde_json::from_slice(&buf[..buf.len() - 1]).unwrap();
+    assert_eq!(
+        record["timestamp"].as_i64(),
+        Some(entry.log_id.index as i64)
+    );
+    assert_eq!(record["log_id"]["index"].as_u64(), Some(entry.log_id.index));
+    assert_eq!(record["kind"], serde_json::json!("Normal"));
+    assert_eq!(record["payload"], payload);
+}
+
+#[test]
+fn test_decode_entries_handles_membership_and_filters() {
+    let node = mk_uuid(0xC1);
+    let log_id1 = mk_log_id(1, node, 5);
+    let log_id2 = mk_log_id(1, node, 6);
+    let mut members = BTreeMap::new();
+    members.insert(node, BasicNode::default());
+    let membership = Membership::new(vec![BTreeSet::from([node])], members);
+    let entries = vec![
+        Entry {
+            log_id: log_id1,
+            payload: EntryPayload::Blank,
+        },
+        Entry {
+            log_id: log_id2,
+            payload: EntryPayload::Membership(membership.clone()),
+        },
+    ];
+    let mut buf = Vec::new();
+    for entry in &entries {
+        buf.extend_from_slice(&encode_entry(entry));
+    }
+
+    let decoded = decode_entries(&buf, log_id2.index..=log_id2.index);
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(decoded[0].log_id, log_id2);
+    match &decoded[0].payload {
+        EntryPayload::Membership(m) => assert_eq!(m, &membership),
+        _ => panic!("expected membership entry"),
+    }
+
+    let decoded_empty = decode_entries(b"notjson\n", 0..=10);
+    assert!(decoded_empty.is_empty());
+}
+
+#[test]
+fn test_recv_map_error_paths() {
+    let (tx, rx) = channel::<Result<(), crate::errors::TvError>>();
+    tx.send(Err(crate::errors::TvError::ReadOnly)).unwrap();
+    let err = recv_unit(rx, ErrorSubject::Logs, ErrorVerb::Write).unwrap_err();
+    let io = err.into_io().unwrap();
+    assert!(io.to_string().contains("Logs"));
+    assert!(io.to_string().contains("read-only"));
+
+    let (_, rx_closed) = channel::<Result<(), crate::errors::TvError>>();
+    let err_closed = recv_unit(rx_closed, ErrorSubject::Logs, ErrorVerb::Read).unwrap_err();
+    let io_closed = err_closed.into_io().unwrap();
+    assert!(io_closed.to_string().contains("Logs"));
+    assert!(io_closed.to_string().contains("Read"));
+}
+
+#[test]
+fn test_vote_and_purge_persistence_helpers() {
+    let (_tmp, part) = mk_partition_owned();
+    let node = mk_uuid(0xD2);
+    let vote = Vote::new(2, node);
+    save_vote_file(&part, &vote).unwrap();
+    let loaded = read_vote_file(&part).unwrap();
+    assert_eq!(loaded, Some(vote));
+
+    let log_id = mk_log_id(1, node, 3);
+    purge_with_persist(&part, &log_id).unwrap();
+    let part_dir = paths::partition_dir(part.root(), part.id());
+    assert!(paths::raft_purge_file(&part_dir).exists());
+    let stored = read_purge_file(&part).unwrap();
+    assert_eq!(stored, Some(log_id));
+}
+
+#[test]
+fn test_get_state_reports_last_ids() {
+    let (_tmp, part) = mk_partition_owned();
+    let node = mk_uuid(0xE3);
+    let log_id1 = mk_log_id(1, node, 1);
+    let log_id2 = mk_log_id(2, node, 2);
+    let entries = [
+        Entry {
+            log_id: log_id1,
+            payload: EntryPayload::Normal(Request(serde_json::json!({"a": 1}))),
+        },
+        Entry {
+            log_id: log_id2,
+            payload: EntryPayload::Normal(Request(serde_json::json!({"b": 2}))),
+        },
+    ];
+    for entry in &entries {
+        part.append(entry.log_id.index, &encode_entry(entry))
+            .unwrap();
+    }
+
+    save_purge_file(&part, &log_id1).unwrap();
+    let state = get_state(&part).unwrap();
+    assert_eq!(state.last_purged_log_id, Some(log_id1));
+    assert_eq!(state.last_log_id, Some(log_id2));
+}
+
+#[test]
+fn test_decode_entries_roundtrip_and_filter() {
+    // Build 3 records manually in jsonl with kind field
+    let nid = Uuid::nil();
+    let l1 = serde_json::json!({
+        "timestamp": 1,
+        "log_id": {"leader_id": {"term": 1, "node_id": nid}, "index": 1},
+        "kind": "Normal",
+        "payload": {"a":1}
+    });
+    let l2 = serde_json::json!({
+        "timestamp": 2,
+        "log_id": {"leader_id": {"term": 1, "node_id": nid}, "index": 2},
+        "kind": "Normal",
+        "payload": {"b":2}
+    });
+    let l3 = serde_json::json!({
+        "timestamp": 3,
+        "log_id": {"leader_id": {"term": 2, "node_id": nid}, "index": 3},
+        "kind": "Normal",
+        "payload": {"c":3}
+    });
+    let mut buf = Vec::new();
+    for v in [l1, l2, l3] {
+        let mut line = serde_json::to_vec(&v).unwrap();
+        line.push(b'\n');
+        buf.extend_from_slice(&line);
+    }
+
+    let out = decode_entries(&buf, 2..=3);
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].log_id.index, 2);
+    assert_eq!(out[1].log_id.index, 3);
+    match &out[0].payload {
+        EntryPayload::Normal(Request(v)) => assert_eq!(v["b"], serde_json::json!(2)),
+        _ => panic!("unexpected payload"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_empty_partition_state_and_reads() {
+    let td = TempDir::new().unwrap();
+    let part = mk_partition(&td);
+    let nid = Uuid::nil();
+    let mut ad = TvrLogAdapter::new(part.clone(), nid);
+
+    let st = ad.get_log_state().await.expect("get_log_state");
+    assert!(st.last_log_id.is_none());
+    assert!(st.last_purged_log_id.is_none());
+
+    let mut rd = ad.get_log_reader().await;
+    let ents = rd.try_get_log_entries(1..=10).await.expect("read range");
+    assert!(ents.is_empty());
+
+    let v = ad.read_vote().await.expect("read_vote");
+    assert!(v.is_none());
+
+    let p = read_purge_file(&part).expect("read_purge_file");
+    assert!(p.is_none());
+
+    let part_dir = paths::partition_dir(part.root(), part.id());
+    assert!(!paths::raft_vote_file(&part_dir).exists());
+    assert!(!paths::raft_purge_file(&part_dir).exists());
+}
