@@ -2,36 +2,19 @@ use std::io::Cursor;
 use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
 use std::thread;
 
-use openraft::TokioRuntime;
 use openraft::storage::{LogFlushed, RaftLogStorage};
 use openraft::{
-    AnyError, BasicNode, Entry, EntryPayload, ErrorSubject, ErrorVerb, LogId, LogState,
+    AnyError, Entry, EntryPayload, ErrorSubject, ErrorVerb, LogId, LogState,
     RaftLogReader, StorageError, StorageIOError, Vote,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
+use crate::disk::atomic::atomic_write_json;
 use crate::PartitionHandle;
 use crate::errors::TvError;
 use crate::partition::read::read_range_blocks;
-use crate::store::paths;
-
-// TypeConfig
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Request(pub serde_json::Value);
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Response(pub Result<serde_json::Value, serde_json::Value>);
-
-openraft::declare_raft_types!(pub TvConfig:
-    D            = Request,
-    R            = Response,
-    NodeId       = Uuid,
-    Node         = BasicNode,
-    Entry        = Entry<TvConfig>,
-    SnapshotData = Cursor<Vec<u8>>,
-    AsyncRuntime = TokioRuntime,
-);
+use crate::raft::{TvrRequest, TvrConfig};
+use crate::raft::paths;
 
 #[derive(Serialize, Deserialize)]
 struct JsonlRecord {
@@ -50,11 +33,11 @@ pub struct TvrLogAdapter {
 
 enum Op {
     // list of (order_key=index, encoded)
-    Append(Vec<(u64, Vec<u8>)>, LogFlushed<TvConfig>),
+    Append(Vec<(u64, Vec<u8>)>, LogFlushed<TvrConfig>),
     Read(u64, u64, Sender<Result<Vec<u8>, TvError>>),
     Truncate(u64, Sender<Result<(), TvError>>),
     Purge(LogId<Uuid>, Sender<Result<(), TvError>>),
-    GetState(Sender<Result<LogState<TvConfig>, TvError>>),
+    GetState(Sender<Result<LogState<TvrConfig>, TvError>>),
     SaveVote(Vote<Uuid>, Sender<Result<(), TvError>>),
     ReadVote(Sender<Result<Option<Vote<Uuid>>, TvError>>),
     Shutdown,
@@ -137,54 +120,10 @@ impl Drop for TvrLogAdapter {
     }
 }
 
-// ---------- Error mapping helpers ----------
-fn se_new(subject: ErrorSubject<Uuid>, verb: ErrorVerb, msg: &str) -> StorageError<Uuid> {
-    StorageError::from(StorageIOError::new(
-        subject,
-        verb,
-        AnyError::new(&std::io::Error::new(
-            std::io::ErrorKind::Other,
-            msg.to_string(),
-        )),
-    ))
-}
+// ---------- Error mapping helpers moved to raft::errors ----------
+use crate::raft::errors::{se_new, map_send_err, map_tv_err, recv_map, recv_unit};
 
-fn map_send_err<E: std::fmt::Display>(
-    subject: ErrorSubject<Uuid>,
-    verb: ErrorVerb,
-    e: E,
-) -> StorageError<Uuid> {
-    se_new(subject, verb, &e.to_string())
-}
-
-fn map_tv_err(
-    e: TvError,
-    subject: ErrorSubject<Uuid>,
-    verb: ErrorVerb,
-) -> StorageError<Uuid> {
-    StorageError::from(StorageIOError::new(subject, verb, AnyError::new(&e)))
-}
-
-fn recv_map<T>(
-    rrx: Receiver<Result<T, TvError>>,
-    subject: ErrorSubject<Uuid>,
-    verb: ErrorVerb,
-) -> Result<T, StorageError<Uuid>> {
-    let rsp = rrx
-        .recv()
-        .map_err(|e| map_send_err(subject.clone(), verb.clone(), e))?;
-    rsp.map_err(|e| map_tv_err(e, subject, verb))
-}
-
-pub(crate) fn recv_unit(
-    rrx: Receiver<Result<(), TvError>>,
-    subject: ErrorSubject<Uuid>,
-    verb: ErrorVerb,
-) -> Result<(), StorageError<Uuid>> {
-    recv_map(rrx, subject, verb)
-}
-
-pub(crate) fn encode_entry(e: &Entry<TvConfig>) -> Vec<u8> {
+pub(crate) fn encode_entry(e: &Entry<TvrConfig>) -> Vec<u8> {
     let (kind, val) = match &e.payload {
         EntryPayload::Blank => ("Blank".to_string(), serde_json::Value::Null),
         EntryPayload::Normal(r) => ("Normal".to_string(), r.0.clone()),
@@ -204,7 +143,7 @@ pub(crate) fn encode_entry(e: &Entry<TvConfig>) -> Vec<u8> {
     out
 }
 
-pub(crate) fn decode_entries(buf: &[u8], range: std::ops::RangeInclusive<u64>) -> Vec<Entry<TvConfig>> {
+pub(crate) fn decode_entries(buf: &[u8], range: std::ops::RangeInclusive<u64>) -> Vec<Entry<TvrConfig>> {
     let plugin = match crate::plugins::resolve_plugin("jsonl") {
         Ok(p) => p,
         Err(_) => return Vec::new(),
@@ -232,7 +171,7 @@ pub(crate) fn decode_entries(buf: &[u8], range: std::ops::RangeInclusive<u64>) -
                         Err(_) => EntryPayload::Blank,
                     }
                 }
-                _ => EntryPayload::Normal(Request(rec.payload)),
+                _ => EntryPayload::Normal(TvrRequest(rec.payload)),
             };
             out.push(Entry { log_id: rec.log_id, payload });
         }
@@ -240,7 +179,7 @@ pub(crate) fn decode_entries(buf: &[u8], range: std::ops::RangeInclusive<u64>) -
     out
 }
 
-pub(crate) fn get_state(part: &PartitionHandle) -> Result<LogState<TvConfig>, crate::errors::TvError> {
+pub(crate) fn get_state(part: &PartitionHandle) -> Result<LogState<TvrConfig>, crate::errors::TvError> {
     // Recover last_purge
     let purge = read_purge_file(part).ok().flatten();
     // Read last record bytes from runtime cache if any
@@ -262,13 +201,11 @@ pub(crate) fn purge_with_persist(part: &PartitionHandle, id: &LogId<Uuid>) -> Re
 }
 
 pub(crate) fn save_vote_file(part: &PartitionHandle, v: &Vote<Uuid>) -> Result<(), crate::errors::TvError> {
-    let part_dir = paths::partition_dir(part.root(), part.id());
-    crate::disk::atomic::atomic_write_json(paths::raft_vote_file(&part_dir), v)
+    atomic_write_json(paths::vote_file(part), v)
 }
 
 pub(crate) fn read_vote_file(part: &PartitionHandle) -> Result<Option<Vote<Uuid>>, crate::errors::TvError> {
-    let part_dir = paths::partition_dir(part.root(), part.id());
-    let p = paths::raft_vote_file(&part_dir);
+    let p = paths::vote_file(&part);
     if !p.exists() {
         return Ok(None);
     }
@@ -282,9 +219,8 @@ struct PurgeFile {
 }
 
 pub(crate) fn save_purge_file(part: &PartitionHandle, id: &LogId<Uuid>) -> Result<(), crate::errors::TvError> {
-    let part_dir = paths::partition_dir(part.root(), part.id());
-    crate::disk::atomic::atomic_write_json(
-        paths::raft_purge_file(&part_dir),
+    atomic_write_json(
+        paths::purge_file(&part),
         &PurgeFile {
             last_deleted: id.clone(),
         },
@@ -292,8 +228,7 @@ pub(crate) fn save_purge_file(part: &PartitionHandle, id: &LogId<Uuid>) -> Resul
 }
 
 pub(crate) fn read_purge_file(part: &PartitionHandle) -> Result<Option<LogId<Uuid>>, crate::errors::TvError> {
-    let part_dir = paths::partition_dir(part.root(), part.id());
-    let p = paths::raft_purge_file(&part_dir);
+    let p = paths::purge_file(&part);
     if !p.exists() {
         return Ok(None);
     }
@@ -302,11 +237,11 @@ pub(crate) fn read_purge_file(part: &PartitionHandle) -> Result<Option<LogId<Uui
     Ok(Some(v.last_deleted))
 }
 
-impl RaftLogReader<TvConfig> for TvrLogAdapter {
+impl RaftLogReader<TvrConfig> for TvrLogAdapter {
     async fn try_get_log_entries<RB: std::ops::RangeBounds<u64> + Send>(
         &mut self,
         range: RB,
-    ) -> Result<Vec<Entry<TvConfig>>, StorageError<Uuid>> {
+    ) -> Result<Vec<Entry<TvrConfig>>, StorageError<Uuid>> {
         use std::ops::Bound::*;
         let start = match range.start_bound() {
             Included(a) => *a,
@@ -327,10 +262,10 @@ impl RaftLogReader<TvConfig> for TvrLogAdapter {
     }
 }
 
-impl RaftLogStorage<TvConfig> for TvrLogAdapter {
+impl RaftLogStorage<TvrConfig> for TvrLogAdapter {
     type LogReader = Self;
 
-    async fn get_log_state(&mut self) -> Result<LogState<TvConfig>, StorageError<Uuid>> {
+    async fn get_log_state(&mut self) -> Result<LogState<TvrConfig>, StorageError<Uuid>> {
         let (rtx, rrx) = channel();
         self.tx
             .send(Op::GetState(rtx))
@@ -361,10 +296,10 @@ impl RaftLogStorage<TvConfig> for TvrLogAdapter {
     async fn append<I>(
         &mut self,
         entries: I,
-        callback: LogFlushed<TvConfig>,
+        callback: LogFlushed<TvrConfig>,
     ) -> Result<(), StorageError<Uuid>>
     where
-        I: IntoIterator<Item = Entry<TvConfig>> + openraft::OptionalSend,
+        I: IntoIterator<Item = Entry<TvrConfig>> + openraft::OptionalSend,
         I::IntoIter: openraft::OptionalSend,
     {
         let mut list: Vec<(u64, Vec<u8>)> = Vec::new();

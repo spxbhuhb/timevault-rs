@@ -1,6 +1,6 @@
 use crate::PartitionHandle;
 use crate::config::PartitionConfig;
-use crate::store::paths;
+use crate::raft::paths;
 use openraft::RaftLogReader;
 use openraft::storage::RaftLogStorage;
 use openraft::{
@@ -11,7 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::channel;
 use tempfile::TempDir;
 use uuid::Uuid;
+use crate::raft::TvrRequest;
 use crate::raft::storage::*;
+use crate::raft::errors::recv_unit;
 
 fn mk_partition(tmp: &TempDir) -> PartitionHandle {
     let root = tmp.path().to_path_buf();
@@ -46,7 +48,7 @@ fn test_encode_entry_roundtrip_fields() {
     let payload = serde_json::json!({"value": 42});
     let entry = Entry {
         log_id,
-        payload: EntryPayload::Normal(Request(payload.clone())),
+        payload: EntryPayload::Normal(TvrRequest(payload.clone())),
     };
 
     let buf = encode_entry(&entry);
@@ -124,8 +126,7 @@ fn test_vote_and_purge_persistence_helpers() {
 
     let log_id = mk_log_id(1, node, 3);
     purge_with_persist(&part, &log_id).unwrap();
-    let part_dir = paths::partition_dir(part.root(), part.id());
-    assert!(paths::raft_purge_file(&part_dir).exists());
+    assert!(paths::purge_file(&part).exists());
     let stored = read_purge_file(&part).unwrap();
     assert_eq!(stored, Some(log_id));
 }
@@ -139,11 +140,11 @@ fn test_get_state_reports_last_ids() {
     let entries = [
         Entry {
             log_id: log_id1,
-            payload: EntryPayload::Normal(Request(serde_json::json!({"a": 1}))),
+            payload: EntryPayload::Normal(TvrRequest(serde_json::json!({"a": 1}))),
         },
         Entry {
             log_id: log_id2,
-            payload: EntryPayload::Normal(Request(serde_json::json!({"b": 2}))),
+            payload: EntryPayload::Normal(TvrRequest(serde_json::json!({"b": 2}))),
         },
     ];
     for entry in &entries {
@@ -191,7 +192,7 @@ fn test_decode_entries_roundtrip_and_filter() {
     assert_eq!(out[0].log_id.index, 2);
     assert_eq!(out[1].log_id.index, 3);
     match &out[0].payload {
-        EntryPayload::Normal(Request(v)) => assert_eq!(v["b"], serde_json::json!(2)),
+        EntryPayload::Normal(TvrRequest(v)) => assert_eq!(v["b"], serde_json::json!(2)),
         _ => panic!("unexpected payload"),
     }
 }
@@ -217,7 +218,6 @@ async fn test_empty_partition_state_and_reads() {
     let p = read_purge_file(&part).expect("read_purge_file");
     assert!(p.is_none());
 
-    let part_dir = paths::partition_dir(part.root(), part.id());
-    assert!(!paths::raft_vote_file(&part_dir).exists());
-    assert!(!paths::raft_purge_file(&part_dir).exists());
+    assert!(!paths::vote_file(&part).exists());
+    assert!(!paths::purge_file(&part).exists());
 }

@@ -14,11 +14,12 @@ use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 pub struct PartitionHandle {
     inner: std::sync::Arc<PartitionInner>,
 }
 
+#[derive(Debug)]
 struct PartitionInner {
     pub root: PathBuf,
     pub id: Uuid,
