@@ -2,9 +2,9 @@ use std::fs;
 use tempfile::TempDir;
 use uuid::Uuid;
 
-use timevault::store::paths;
 use timevault::PartitionHandle;
 use timevault::disk::manifest::ManifestLine;
+use timevault::store::paths;
 
 fn enc(ts: i64, value: serde_json::Value) -> Vec<u8> {
     let rec = serde_json::json!({"timestamp": ts, "payload": value});
@@ -14,14 +14,17 @@ fn enc(ts: i64, value: serde_json::Value) -> Vec<u8> {
 }
 
 fn write_metadata(part_dir: &std::path::Path, id: Uuid, roll_max_bytes: u64, index_max_records: u32) {
-    use timevault::disk::metadata::MetadataJson;
     use timevault::config::{ChunkRollCfg, IndexCfg, RetentionCfg};
+    use timevault::disk::metadata::MetadataJson;
     let m = MetadataJson {
         partition_id: id,
         format_version: 1,
         format_plugin: "jsonl".to_string(),
         chunk_roll: ChunkRollCfg { max_bytes: roll_max_bytes, max_hours: 0 },
-        index: IndexCfg { max_records: index_max_records, max_hours: 0 },
+        index: IndexCfg {
+            max_records: index_max_records,
+            max_hours: 0,
+        },
         retention: RetentionCfg::default(),
         key_is_timestamp: true,
         logical_purge: false,
@@ -51,7 +54,9 @@ fn purge_noop_when_cutoff_before_head() {
     write_metadata(&part_dir, id, u64::MAX, 2);
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
-    for i in 5..=9 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+    for i in 5..=9 {
+        h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap();
+    }
     let manifest_path = paths::partition_manifest(&part_dir);
     let before = read_manifest_lines(&manifest_path);
 
@@ -76,11 +81,37 @@ fn purge_inside_open_chunk() {
     write_metadata(&part_dir, id, u64::MAX, 2);
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
-    for i in 1..=5 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+    for i in 1..=5 {
+        h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap();
+    }
     // Purge up to 3 inclusive → keep 4,5
     h.purge(3).unwrap();
     let data = h.read_range(4, 100).unwrap();
     assert_eq!(count_lines(&data), 2);
+}
+
+#[test]
+fn purge_open_chunk_preserves_runtime_tail() {
+    let td = TempDir::new().unwrap();
+    let root = td.path().to_path_buf();
+    let id = Uuid::now_v7();
+    let part_dir = paths::partition_dir(&root, id);
+    fs::create_dir_all(paths::chunks_dir(&part_dir)).unwrap();
+    // Small index cadence to ensure an index file exists before purge.
+    write_metadata(&part_dir, id, u64::MAX, 2);
+    let h = PartitionHandle::open(root.clone(), id).unwrap();
+
+    for i in 1..=4 {
+        h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap();
+    }
+    let tail = enc(5, serde_json::json!(5));
+    h.append(5, &tail).unwrap();
+
+    // Purge up to and including record 3; records 4 and 5 should remain.
+    h.purge(3).unwrap();
+
+    // Runtime should still expose the last record bytes for the open chunk.
+    assert_eq!(h.last_record().as_deref(), Some(tail.as_slice()));
 }
 
 #[test]
@@ -95,7 +126,9 @@ fn purge_removes_older_chunks() {
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
     // Append multiple records to produce >=2 chunks
-    for i in 1..=20 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+    for i in 1..=20 {
+        h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap();
+    }
     let manifest_path = paths::partition_manifest(&part_dir);
     let before = read_manifest_lines(&manifest_path);
     assert!(before.len() >= 2);
@@ -119,7 +152,9 @@ fn purge_to_empty_partition() {
     write_metadata(&part_dir, id, u64::MAX, 100);
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
-    for i in 10..=12 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+    for i in 10..=12 {
+        h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap();
+    }
     h.purge(20).unwrap(); // cutoff after latest
 
     let manifest_path = paths::partition_manifest(&part_dir);
@@ -141,7 +176,9 @@ fn purge_open_chunk_without_index() {
     write_metadata(&part_dir, id, u64::MAX, 100);
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
-    for i in 1..=5 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+    for i in 1..=5 {
+        h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap();
+    }
     h.purge(3).unwrap();
     let data = h.read_range(0, 100).unwrap();
     assert_eq!(count_lines(&data), 2);
@@ -159,7 +196,9 @@ fn purge_inside_closed_chunk_drops_partial_block() {
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
     // First chunk will have records 1-5, second chunk record 6
-    for i in 1..=6 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+    for i in 1..=6 {
+        h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap();
+    }
 
     // Purge up to key 3 inclusive, keeping 4,5 in the closed chunk
     h.purge(3).unwrap();
@@ -180,7 +219,9 @@ fn purge_idempotent() {
     write_metadata(&part_dir, id, u64::MAX, 2);
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
-    for i in 1..=5 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+    for i in 1..=5 {
+        h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap();
+    }
 
     let manifest_path = paths::partition_manifest(&part_dir);
     h.purge(3).unwrap();
