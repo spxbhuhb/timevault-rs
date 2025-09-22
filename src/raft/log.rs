@@ -193,7 +193,7 @@ pub(crate) fn decode_entries(part : &PartitionHandle, buf: &[u8], range: std::op
                 }
                 _ => EntryPayload::Normal(TvrRequest(rec.payload)),
             };
-            trace!("decode_entries {}: {:?}", part.short_id(), payload.clone());
+            trace!("decode_entries {}: {} {:?}", part.short_id(), rec.log_id, payload.clone());
             out.push(Entry { log_id: rec.log_id, payload });
         }
     }
@@ -201,15 +201,20 @@ pub(crate) fn decode_entries(part : &PartitionHandle, buf: &[u8], range: std::op
 }
 
 pub(crate) fn get_state(part: &PartitionHandle) -> Result<LogState<TvrConfig>, TvError> {
-    // Recover last_purge
     let purge = read_purge_file(part).ok().flatten();
-    // Read last record bytes from runtime cache if any
-    let rt = part.stats();
-    let _ = rt; // placeholder
-    // Read last block
-    let last = part.read_range(u64::MAX - 1, u64::MAX)?; // hack: get tail
-    let entries = decode_entries(part, &last, 0..=u64::MAX);
-    let last_log_id = entries.last().map(|e| e.log_id);
+
+    let last = part.last_record();
+    let last_log_id;
+
+    if let Some(last) = last {
+        let rec = serde_json::from_slice::<JsonlRecord>(&*last)?;
+        last_log_id = Some(rec.log_id);
+    } else {
+        last_log_id = None;
+    }
+
+    trace!("get_state: last_log_id={:?}, purge={:?}", last_log_id, purge);
+
     Ok(LogState {
         last_purged_log_id: purge,
         last_log_id,

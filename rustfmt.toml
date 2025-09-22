@@ -1,0 +1,21 @@
+# Line width
+max_width = 200
+wrap_comments = true
+
+# Imports
+imports_granularity = "Module"   # group paths from the same module together
+group_imports = "StdExternalCrate"
+reorder_imports = true
+
+# Function and closure style
+fn_single_line = true
+fn_params_layout = "Tall"        # one param per line if it doesn’t fit
+spaces_around_ranges = true
+
+# Structs & enums
+struct_lit_width = 40
+enum_discrim_align_threshold = 20
+
+# Miscellaneous
+newline_style = "Unix"           # LF, consistent across platforms
+use_field_init_shorthand = true  # Foo { x } instead of Foo { x: x }

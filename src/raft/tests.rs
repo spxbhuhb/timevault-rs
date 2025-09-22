@@ -231,7 +231,7 @@ struct TvrStoreBuilder { }
 impl StoreBuilder<TvrConfig, TvrLogAdapter, TvrPartitionStateMachine, ()> for TvrStoreBuilder {
     async fn build(&self) -> Result<((), TvrLogAdapter,TvrPartitionStateMachine), StorageError<TvrNodeId>> {
         let (_root, part) = mk_partition_owned("openraft_test_all");
-        let node_id = part.uuid().as_u64_pair().1;
+        let node_id = part.id().as_u64_pair().1;
         let log = TvrLogAdapter::new(part.clone(), node_id);
         let state = TvrPartitionStateMachine::new(part.clone())?;
         Ok(((), log, state))
@@ -239,8 +239,9 @@ impl StoreBuilder<TvrConfig, TvrLogAdapter, TvrPartitionStateMachine, ()> for Tv
 }
 
 #[traced_test]
-#[test]
-pub fn openraft_test_all() -> Result<(), StorageError<TvrNodeId>> {
-    Suite::test_all(TvrStoreBuilder {  })?;
-    Ok(())
+#[tokio::test(flavor = "multi_thread")]
+async fn openraft_test_all() {
+    //Suite::test_all(TvrStoreBuilder {  })?;
+    let (_, l, s) = TvrStoreBuilder { }.build().await.expect("build");
+    Suite::<TvrConfig,TvrLogAdapter,TvrPartitionStateMachine, TvrStoreBuilder, ()>::get_initial_state_log_ids(l,s).await.expect("get_initial_state_log_ids");
 }

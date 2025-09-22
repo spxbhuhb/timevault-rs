@@ -2,7 +2,7 @@ use std::io::Cursor;
 use openraft::{BasicNode, Entry, StorageError, TokioRuntime};
 use serde::{Deserialize, Serialize};
 
-mod log;
+pub mod log;
 mod state;
 mod paths;
 mod errors;

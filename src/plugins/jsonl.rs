@@ -17,8 +17,7 @@ impl FormatPlugin for JsonlPlugin {
     fn encode(&self, ts_ms: i64, value: &serde_json::Value) -> io::Result<Vec<u8>> {
         // Encode a JSONL line with fields `timestamp` and `payload`.
         let rec = serde_json::json!({"timestamp": ts_ms, "payload": value});
-        let mut line =
-            serde_json::to_vec(&rec).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let mut line = serde_json::to_vec(&rec).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         line.push(b'\n');
         Ok(line)
     }
@@ -58,10 +57,8 @@ impl<'a> ChunkScanner for JsonlScanner<'a> {
             }
         }
 
-        let json = std::str::from_utf8(&self.line_buf)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid utf8 in jsonl"))?;
-        let JL { timestamp } = serde_json::from_str::<JL>(json)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "json"))?;
+        let json = std::str::from_utf8(&self.line_buf).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid utf8 in jsonl"))?;
+        let JL { timestamp } = serde_json::from_str::<JL>(json).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "json"))?;
 
         let rec_len = bytes_read as u32;
         let meta = RecordMeta {
@@ -87,10 +84,7 @@ impl<'a> ChunkScanner for JsonlScanner<'a> {
         let n = self.reader.read(&mut b)?;
         let prev_is_nl = n == 1 && b[0] == b'\n';
         if !prev_is_nl {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "seek_to offset not at line boundary",
-            ));
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "seek_to offset not at line boundary"));
         }
         Ok(())
     }

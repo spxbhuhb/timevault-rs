@@ -125,17 +125,6 @@ impl PartitionHandle {
         Ok(Self { inner: std::sync::Arc::new(inner) })
     }
 
-    pub fn uuid(&self) -> Uuid { self.inner.id }
-    pub fn append(&self, order_key: u64, payload: &[u8]) -> Result<AppendAck> { append::append(self, order_key, payload) }
-    pub fn read_range(&self, from_key: u64, to_key: u64) -> Result<Vec<u8>> { read::read_range_blocks(self, from_key, to_key) }
-    pub fn force_roll(&self) -> Result<()> { roll::force_roll(self) }
-    pub fn stats(&self) -> PartitionStats { self.inner.stats.lock().clone() }
-    pub fn set_config(&self, delta: PartitionConfigDelta) -> Result<()> { append::set_config(self, delta) }
-    pub fn truncate(&self, order_key: u64) -> Result<()> { truncate::truncate(self, order_key) }
-    pub fn purge(&self, order_key: u64) -> Result<()> { purge::purge(self, order_key) }
-}
-
-impl PartitionHandle {
     pub fn id(&self) -> Uuid { self.inner.id }
     pub fn short_id(&self) -> String {
         let simple = self.inner.id.simple().to_string();
@@ -143,6 +132,16 @@ impl PartitionHandle {
     }
     pub fn root(&self) -> &PathBuf { &self.inner.root }
     pub fn cfg(&self) -> PartitionConfig { self.inner.cfg.read().clone() }
+    pub fn last_record(&self) -> Option<Vec<u8>> { self.inner.runtime.read().cur_last_record_bytes.clone() }
+
+    pub fn append(&self, order_key: u64, payload: &[u8]) -> Result<AppendAck> { append::append(self, order_key, payload) }
+    pub fn read_range(&self, from_key: u64, to_key: u64) -> Result<Vec<u8>> { read::read_range_blocks(self, from_key, to_key) }
+    pub fn force_roll(&self) -> Result<()> { roll::force_roll(self) }
+    pub fn stats(&self) -> PartitionStats { self.inner.stats.lock().clone() }
+    pub fn set_config(&self, delta: PartitionConfigDelta) -> Result<()> { append::set_config(self, delta) }
+    pub fn truncate(&self, order_key: u64) -> Result<()> { truncate::truncate(self, order_key) }
+    pub fn purge(&self, order_key: u64) -> Result<()> { purge::purge(self, order_key) }
+
     #[cfg(test)]
     pub fn cfg_mut_for_tests(&self) -> parking_lot::RwLockWriteGuard<'_, PartitionConfig> { self.inner.cfg.write() }
 }
