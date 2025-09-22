@@ -1,8 +1,10 @@
+#![cfg(test)]
+
 use crate::PartitionHandle;
 use crate::config::PartitionConfig;
 use crate::raft::errors::recv_unit;
 use crate::raft::log::*;
-use crate::raft::{TvrNodeId, ValueConfig, ValueLogAdapter, ValueRequest, ValueResponse, ValueStateMachine, paths};
+use crate::raft::{TvrNodeId, paths, TvrConfig, state};
 use crate::testing::test_dir;
 use openraft::storage::RaftLogStorage;
 use openraft::testing::{StoreBuilder, Suite};
@@ -11,10 +13,25 @@ use openraft::{RaftLogReader, StorageError};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
+use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 #[cfg(feature = "traced-tests")]
 use tracing_test::traced_test;
 use uuid::Uuid;
+
+pub type ValueRequest = serde_json::Value;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ValueResponse(pub Result<serde_json::Value, serde_json::Value>);
+
+impl Default for ValueResponse {
+    fn default() -> Self {
+        Self(Ok(serde_json::Value::Null))
+    }
+}
+pub type ValueConfig = TvrConfig<ValueRequest, ValueResponse>;
+pub type ValueLogAdapter = TvrLogAdapter<ValueRequest, ValueResponse>;
+pub type ValueStateMachine = state::TvrPartitionStateMachine<ValueRequest, ValueResponse>;
 
 fn mk_partition(tmp: &TempDir) -> PartitionHandle {
     let root = tmp.path().to_path_buf();

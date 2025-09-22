@@ -3,7 +3,6 @@ use std::io::Cursor;
 use std::marker::PhantomData;
 
 use openraft::{AppData, AppDataResponse, BasicNode, Entry, RaftTypeConfig, StorageError, TokioRuntime};
-use serde::{Deserialize, Serialize};
 
 mod errors;
 pub mod log;
@@ -68,8 +67,8 @@ where
     type Node = BasicNode;
     type Entry = Entry<Self>;
     type SnapshotData = Cursor<Vec<u8>>;
-    type Responder = openraft::impls::OneshotResponder<Self>;
     type AsyncRuntime = TokioRuntime;
+    type Responder = openraft::impls::OneshotResponder<Self>;
 }
 
 pub type TvRaft<C> = openraft::Raft<C>;
@@ -80,17 +79,3 @@ pub type TvrNodeId = u64;
 pub type TvrNode = BasicNode;
 
 type StorageResult<T> = Result<T, StorageError<TvrNodeId>>;
-
-pub type ValueRequest = serde_json::Value;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ValueResponse(pub Result<serde_json::Value, serde_json::Value>);
-
-impl Default for ValueResponse {
-    fn default() -> Self {
-        Self(Ok(serde_json::Value::Null))
-    }
-}
-pub type ValueConfig = TvrConfig<ValueRequest, ValueResponse>;
-pub type ValueLogAdapter = log::TvrLogAdapter<ValueRequest, ValueResponse>;
-pub type ValueStateMachine = state::TvrPartitionStateMachine<ValueRequest, ValueResponse>;
