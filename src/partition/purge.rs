@@ -9,14 +9,14 @@ use crate::errors::{Result, TvError};
 use crate::partition::PartitionHandle;
 use crate::plugins::FormatPlugin;
 use crate::store::paths;
-use crate::partition::common;
+use crate::partition::misc;
 
 pub fn purge(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
-    common::ensure_writable(h)?;
-    let p = common::paths_for(h)?;
+    misc::ensure_writable(h)?;
+    let p = misc::paths_for(h)?;
 
     // Load meta+plugin and persist last_purge_id durably before doing anything else
-    let (mut meta, plugin) = common::load_meta_and_plugin(&p.part_dir)?;
+    let (mut meta, plugin) = misc::load_meta_and_plugin(&p.part_dir)?;
     meta.last_purge_id = Some(cutoff_key);
     let meta_path = paths::partition_metadata(&p.part_dir);
     crate::disk::atomic::atomic_write_json(&meta_path, &meta)?;
@@ -28,7 +28,7 @@ pub fn purge(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
     purge_partition_dir(&p.part_dir, cutoff_key, &*plugin)?;
 
     // Refresh runtime at the end
-    common::refresh_runtime(h, &meta)?;
+    misc::refresh_runtime(h, &meta)?;
 
     Ok(())
 }
@@ -87,8 +87,8 @@ pub fn purge_partition_dir(part_dir: &std::path::Path, cutoff_key: u64, plugin: 
     }
 
     // Rewrite manifest and delete files
-    crate::partition::common::rewrite_manifest(&manifest_path, &new_manifest)?;
-    crate::partition::common::delete_chunk_files(&chunks_dir, &to_delete);
+    crate::partition::misc::rewrite_manifest(&manifest_path, &new_manifest)?;
+    crate::partition::misc::delete_chunk_files(&chunks_dir, &to_delete);
 
     Ok(())
 }

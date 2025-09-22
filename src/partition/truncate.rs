@@ -5,20 +5,20 @@ use uuid::Uuid;
 use crate::disk::index::{load_index_lines, IndexLine};
 use crate::disk::manifest::{load_manifest, ManifestLine};
 use crate::errors::{Result, TvError};
-use crate::partition::common;
+use crate::partition::misc;
 use crate::partition::PartitionHandle;
 use crate::plugins::FormatPlugin;
 use crate::store::paths;
 
 pub fn truncate(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
-    common::ensure_writable(h)?;
-    let p = common::paths_for(h)?;
+    misc::ensure_writable(h)?;
+    let p = misc::paths_for(h)?;
 
     let manifest = load_manifest(&p.manifest_path)?;
     if manifest.is_empty() { return Ok(()); }
 
     // Load metadata and plugin for potential scanning
-    let (meta, plugin) = common::load_meta_and_plugin(&p.part_dir)?;
+    let (meta, plugin) = misc::load_meta_and_plugin(&p.part_dir)?;
 
     // Determine chunks to keep/delete and potential overlapping chunk
     let mut new_manifest: Vec<ManifestLine> = Vec::new();
@@ -66,9 +66,9 @@ pub fn truncate(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
         }
     }
 
-    common::rewrite_manifest(&p.manifest_path, &new_manifest)?;
-    common::delete_chunk_files(&p.chunks_dir, &to_delete);
-    common::refresh_runtime(h, &meta)?;
+    misc::rewrite_manifest(&p.manifest_path, &new_manifest)?;
+    misc::delete_chunk_files(&p.chunks_dir, &to_delete);
+    misc::refresh_runtime(h, &meta)?;
 
     Ok(())
 }
@@ -177,13 +177,13 @@ fn truncate_chunk_and_index(
     // If no bytes remain, delete files by caller
     if new_len == 0 {
         // Truncate files to zero for safety; caller may remove them
-        let _ = common::truncate_file(&chunk_path, 0);
+        let _ = misc::truncate_file(&chunk_path, 0);
         let _ = crate::disk::index::rewrite_index_atomic(&index_path, &[]);
         return Ok((false, None));
     }
 
     // Truncate chunk file
-    common::truncate_file(&chunk_path, new_len)?;
+    misc::truncate_file(&chunk_path, new_len)?;
 
     // Rewrite index file to only kept blocks (no partial adjustment). For open chunk, kept blocks already end <= new_len.
     // For closed chunk, we ensured end is exactly last kept block end.

@@ -1,10 +1,11 @@
 use std::fs;
-use std::path::PathBuf;
 use uuid::Uuid;
 
 use timevault::store::paths;
 use timevault::PartitionHandle;
 use timevault::disk::manifest::ManifestLine;
+
+mod common;
 
 // This test intentionally keeps its outputs on disk under target/test so they can be
 // manually inspected after `cargo test`. Other tests continue to use TempDir.
@@ -17,25 +18,9 @@ fn enc(ts: i64, value: serde_json::Value) -> Vec<u8> {
 
 #[test]
 fn append_persistent_outputs_under_target_test() {
-    // Compute a stable location under the project root: ./target/test/<testname>-<uuid>
-    let project_root = project_root();
-    let tests_root = project_root.join("target").join("test");
-    fs::create_dir_all(&tests_root).unwrap();
-
-    // Clear previous runs' outputs for this test to avoid accumulation
-    if let Ok(entries) = fs::read_dir(&tests_root) {
-        for e in entries.flatten() {
-            if let Ok(name) = e.file_name().into_string() {
-                if name.starts_with("append_persistent_") {
-                    let _ = fs::remove_dir_all(e.path());
-                }
-            }
-        }
-    }
 
     let id = Uuid::now_v7();
-    let test_dir = tests_root.join(format!("append_persistent_{}", id));
-    let root = test_dir;
+    let root = common::test_dir("append_persistent");
 
     // Prepare partition dir and metadata with small max_bytes to allow small chunks
     let part_dir = paths::partition_dir(&root, id);
@@ -88,13 +73,4 @@ fn write_metadata_with_roll(part_dir: &std::path::Path, id: Uuid, max_bytes: u64
 fn read_manifest_lines(p: &std::path::Path) -> Vec<ManifestLine> {
     let s = std::fs::read_to_string(p).unwrap();
     s.lines().filter(|l| !l.trim().is_empty()).map(|l| serde_json::from_str::<ManifestLine>(l).unwrap()).collect()
-}
-
-// Best-effort to get the project root when running with `cargo test`.
-// It walks up from CARGO_MANIFEST_DIR if present, else current_dir.
-fn project_root() -> PathBuf {
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        return PathBuf::from(manifest_dir);
-    }
-    std::env::current_dir().unwrap()
 }

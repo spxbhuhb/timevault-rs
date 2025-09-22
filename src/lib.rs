@@ -7,7 +7,8 @@ pub mod partition;
 pub mod disk;
 pub mod admin;
 pub mod raft;
+mod testing;
 
 pub use store::Store;
-pub use partition::{PartitionHandle, AppendAck, PartitionConfigDelta};
+pub use partition::{AppendAck, PartitionConfigDelta, PartitionHandle};
 pub use admin::stats::PartitionStats;

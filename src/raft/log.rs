@@ -8,6 +8,7 @@ use openraft::{
     RaftLogReader, StorageError, Vote,
 };
 use serde::{Deserialize, Serialize};
+use tracing::trace;
 use crate::disk::atomic::atomic_write_json;
 use crate::PartitionHandle;
 use crate::errors::TvError;
@@ -16,7 +17,7 @@ use crate::raft::{TvrRequest, TvrConfig, TvrNodeId};
 use crate::raft::paths;
 use crate::raft::errors::{map_send_err, recv_map, recv_unit};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct JsonlRecord {
     timestamp: i64,
     log_id: LogId<TvrNodeId>,
@@ -66,6 +67,7 @@ impl TvrLogAdapter {
         while let Ok(op) = rx.recv() {
             match op {
                 Op::Append(list, cb) => {
+                    trace!("bg_loop {}: append list.len={}", part.short_id(), list.len());
                     let mut first_err: Option<TvError> = None;
                     for (idx, bytes) in list {
                         if let Err(e) = part.append(idx, &bytes) {
@@ -83,30 +85,39 @@ impl TvrLogAdapter {
                     }
                 }
                 Op::Read(a, b, tx) => {
+                    trace!("bg_loop {}: read a={}, b={}", part.short_id(), a, b);
                     let r = read_range_blocks(&part, a, b);
                     tx.send(r).expect("bg_loop: failed to send Read response");
                 }
                 Op::Truncate(idx, tx) => {
+                    trace!("bg_loop {}: truncate idx={}", part.short_id(), idx);
                     let r = part.truncate(idx);
                     tx.send(r).expect("bg_loop: failed to send Truncate response");
                 }
                 Op::Purge(id, tx) => {
+                    trace!("bg_loop {}: purge id={:x}", part.short_id(), id.index);
                     let r = purge_with_persist(&part, &id);
                     tx.send(r).expect("bg_loop: failed to send Purge response");
                 }
                 Op::GetState(tx) => {
+                    trace!("bg_loop {}: get state", part.short_id());
                     let r = get_state(&part);
                     tx.send(r).expect("bg_loop: failed to send GetState response");
                 }
                 Op::SaveVote(v, tx) => {
+                    trace!("bg_loop {}: save vote", part.short_id());
                     let r = save_vote_file(&part, &v);
                     tx.send(r).expect("bg_loop: failed to send SaveVote response");
                 }
                 Op::ReadVote(tx) => {
+                    trace!("bg_loop {}: read vote", part.short_id());
                     let r = read_vote_file(&part);
                     tx.send(r).expect("bg_loop: failed to send ReadVote response");
                 }
-                Op::Shutdown => break,
+                Op::Shutdown => {
+                    trace!("bg_loop {}: shutdown", part.short_id());
+                    break
+                },
             }
         }
     }
@@ -152,7 +163,7 @@ pub(crate) fn encode_entry(e: &Entry<TvrConfig>) -> Vec<u8> {
     out
 }
 
-pub(crate) fn decode_entries(buf: &[u8], range: std::ops::RangeInclusive<u64>) -> Vec<Entry<TvrConfig>> {
+pub(crate) fn decode_entries(part : &PartitionHandle, buf: &[u8], range: std::ops::RangeInclusive<u64>) -> Vec<Entry<TvrConfig>> {
     let plugin = match crate::plugins::resolve_plugin("jsonl") {
         Ok(p) => p,
         Err(_) => return Vec::new(),
@@ -182,13 +193,14 @@ pub(crate) fn decode_entries(buf: &[u8], range: std::ops::RangeInclusive<u64>) -
                 }
                 _ => EntryPayload::Normal(TvrRequest(rec.payload)),
             };
+            trace!("decode_entries {}: {:?}", part.short_id(), payload.clone());
             out.push(Entry { log_id: rec.log_id, payload });
         }
     }
     out
 }
 
-pub(crate) fn get_state(part: &PartitionHandle) -> Result<LogState<TvrConfig>, crate::errors::TvError> {
+pub(crate) fn get_state(part: &PartitionHandle) -> Result<LogState<TvrConfig>, TvError> {
     // Recover last_purge
     let purge = read_purge_file(part).ok().flatten();
     // Read last record bytes from runtime cache if any
@@ -196,7 +208,7 @@ pub(crate) fn get_state(part: &PartitionHandle) -> Result<LogState<TvrConfig>, c
     let _ = rt; // placeholder
     // Read last block
     let last = part.read_range(u64::MAX - 1, u64::MAX)?; // hack: get tail
-    let entries = decode_entries(&last, 0..=u64::MAX);
+    let entries = decode_entries(part, &last, 0..=u64::MAX);
     let last_log_id = entries.last().map(|e| e.log_id);
     Ok(LogState {
         last_purged_log_id: purge,
@@ -204,16 +216,16 @@ pub(crate) fn get_state(part: &PartitionHandle) -> Result<LogState<TvrConfig>, c
     })
 }
 
-pub(crate) fn purge_with_persist(part: &PartitionHandle, id: &LogId<TvrNodeId>) -> Result<(), crate::errors::TvError> {
+pub(crate) fn purge_with_persist(part: &PartitionHandle, id: &LogId<TvrNodeId>) -> Result<(), TvError> {
     save_purge_file(part, id)?;
     part.purge(id.index)
 }
 
-pub(crate) fn save_vote_file(part: &PartitionHandle, v: &Vote<TvrNodeId>) -> Result<(), crate::errors::TvError> {
+pub(crate) fn save_vote_file(part: &PartitionHandle, v: &Vote<TvrNodeId>) -> Result<(), TvError> {
     atomic_write_json(paths::vote_file(part), v)
 }
 
-pub(crate) fn read_vote_file(part: &PartitionHandle) -> Result<Option<Vote<TvrNodeId>>, crate::errors::TvError> {
+pub(crate) fn read_vote_file(part: &PartitionHandle) -> Result<Option<Vote<TvrNodeId>>, TvError> {
     let p = paths::vote_file(&part);
     if !p.exists() {
         return Ok(None);
@@ -227,7 +239,7 @@ struct PurgeFile {
     last_deleted: LogId<TvrNodeId>,
 }
 
-pub(crate) fn save_purge_file(part: &PartitionHandle, id: &LogId<TvrNodeId>) -> Result<(), crate::errors::TvError> {
+pub(crate) fn save_purge_file(part: &PartitionHandle, id: &LogId<TvrNodeId>) -> Result<(), TvError> {
     atomic_write_json(
         paths::purge_file(&part),
         &PurgeFile {
@@ -236,7 +248,7 @@ pub(crate) fn save_purge_file(part: &PartitionHandle, id: &LogId<TvrNodeId>) -> 
     )
 }
 
-pub(crate) fn read_purge_file(part: &PartitionHandle) -> Result<Option<LogId<TvrNodeId>>, crate::errors::TvError> {
+pub(crate) fn read_purge_file(part: &PartitionHandle) -> Result<Option<LogId<TvrNodeId>>, TvError> {
     let p = paths::purge_file(&part);
     if !p.exists() {
         return Ok(None);
@@ -262,12 +274,15 @@ impl RaftLogReader<TvrConfig> for TvrLogAdapter {
             Excluded(b) => b - 1,
             Unbounded => u64::MAX,
         };
+
+        trace!("try_get_log_entries {}..{}", start, end);
+
         let (rtx, rrx) = channel();
         self.tx
             .send(Op::Read(start, end, rtx))
             .map_err(|e| map_send_err(ErrorSubject::Logs, ErrorVerb::Read, e))?;
         let buf = recv_map(rrx, ErrorSubject::Logs, ErrorVerb::Read)?;
-        Ok(decode_entries(&buf, start..=end))
+        Ok(decode_entries(&self.part, &buf, start..=end))
     }
 }
 
@@ -313,6 +328,7 @@ impl RaftLogStorage<TvrConfig> for TvrLogAdapter {
     {
         let mut list: Vec<(u64, Vec<u8>)> = Vec::new();
         for e in entries.into_iter() {
+            trace!("append {}: {:?}", self.part.short_id(), e);
             let idx = e.log_id.index;
             let buf = encode_entry(&e);
             list.push((idx, buf));

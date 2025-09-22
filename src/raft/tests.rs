@@ -8,15 +8,17 @@ use openraft::{
     Vote,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::sync::mpsc::channel;
-use std::sync::Mutex;
 use openraft::testing::{StoreBuilder, Suite};
 use tempfile::TempDir;
+use tracing_test::traced_test;
 use uuid::Uuid;
 use crate::raft::TvrRequest;
 use crate::raft::log::*;
 use crate::raft::errors::recv_unit;
 use crate::raft::state::TvrPartitionStateMachine;
+use crate::testing::test_dir;
 
 fn mk_partition(tmp: &TempDir) -> PartitionHandle {
     let root = tmp.path().to_path_buf();
@@ -32,14 +34,13 @@ fn mk_log_id(term: u64, node: TvrNodeId, index: u64) -> LogId<TvrNodeId> {
     LogId::new(CommittedLeaderId::new(term, node), index)
 }
 
-fn mk_partition_owned() -> (TempDir, PartitionHandle) {
-    let tmp = TempDir::new().unwrap();
-    let root = tmp.path().to_path_buf();
-    let id = mk_nodeid(0xA5);
+fn mk_partition_owned(test_name : &str) -> (PathBuf, PartitionHandle) {
+    let uuid = Uuid::now_v7();
+    let root = test_dir(test_name, uuid);
     let mut cfg = PartitionConfig::default();
     cfg.format_plugin = "jsonl".to_string();
-    let part = PartitionHandle::create(root, Uuid::from_u128(id as u128), cfg).unwrap();
-    (tmp, part)
+    let part = PartitionHandle::create(root.clone(), uuid, cfg).unwrap();
+    (root, part)
 }
 
 #[test]
@@ -67,6 +68,7 @@ fn test_encode_entry_roundtrip_fields() {
 
 #[test]
 fn test_decode_entries_handles_membership_and_filters() {
+    let (_root, part) = mk_partition_owned("test_decode_entries_handles_membership_and_filters");
     let node = mk_nodeid(0xC1);
     let log_id1 = mk_log_id(1, node, 5);
     let log_id2 = mk_log_id(1, node, 6);
@@ -88,7 +90,7 @@ fn test_decode_entries_handles_membership_and_filters() {
         buf.extend_from_slice(&encode_entry(entry));
     }
 
-    let decoded = decode_entries(&buf, log_id2.index..=log_id2.index);
+    let decoded = decode_entries(&part, &buf, log_id2.index..=log_id2.index);
     assert_eq!(decoded.len(), 1);
     assert_eq!(decoded[0].log_id, log_id2);
     match &decoded[0].payload {
@@ -96,7 +98,7 @@ fn test_decode_entries_handles_membership_and_filters() {
         _ => panic!("expected membership entry"),
     }
 
-    let decoded_empty = decode_entries(b"notjson\n", 0..=10);
+    let decoded_empty = decode_entries(&part, b"notjson\n", 0..=10);
     assert!(decoded_empty.is_empty());
 }
 
@@ -118,7 +120,7 @@ fn test_recv_map_error_paths() {
 
 #[test]
 fn test_vote_and_purge_persistence_helpers() {
-    let (_tmp, part) = mk_partition_owned();
+    let (_tmp, part) = mk_partition_owned("test_vote_and_purge_persistence_helpers");
     let node = mk_nodeid(0xD2);
     let vote = Vote::new(2, node);
     save_vote_file(&part, &vote).unwrap();
@@ -134,7 +136,7 @@ fn test_vote_and_purge_persistence_helpers() {
 
 #[test]
 fn test_get_state_reports_last_ids() {
-    let (_tmp, part) = mk_partition_owned();
+    let (_tmp, part) = mk_partition_owned("test_get_state_reports_last_ids");
     let node = mk_nodeid(0xE3);
     let log_id1 = mk_log_id(1, node, 1);
     let log_id2 = mk_log_id(2, node, 2);
@@ -161,6 +163,8 @@ fn test_get_state_reports_last_ids() {
 
 #[test]
 fn test_decode_entries_roundtrip_and_filter() {
+    let (_root, part) = mk_partition_owned("test_decode_entries_roundtrip_and_filter");
+
     // Build 3 records manually in jsonl with kind field
     let l1 = serde_json::json!({
         "timestamp": 1,
@@ -187,7 +191,7 @@ fn test_decode_entries_roundtrip_and_filter() {
         buf.extend_from_slice(&line);
     }
 
-    let out = decode_entries(&buf, 2..=3);
+    let out = decode_entries(&part, &buf, 2..=3);
     assert_eq!(out.len(), 2);
     assert_eq!(out[0].log_id.index, 2);
     assert_eq!(out[1].log_id.index, 3);
@@ -221,29 +225,22 @@ async fn test_empty_partition_state_and_reads() {
     assert!(!paths::purge_file(&part).exists());
 }
 
-struct TvrStoreBuilder {
-    tempdirs: Mutex<Vec<TempDir>>,
-}
+struct TvrStoreBuilder { }
 
-impl Default for TvrStoreBuilder {
-    fn default() -> Self {
-        Self { tempdirs: Mutex::new(Vec::new()) }
-    }
-}
 
 impl StoreBuilder<TvrConfig, TvrLogAdapter, TvrPartitionStateMachine, ()> for TvrStoreBuilder {
     async fn build(&self) -> Result<((), TvrLogAdapter,TvrPartitionStateMachine), StorageError<TvrNodeId>> {
-        let (tmp, part) = mk_partition_owned();
-        self.tempdirs.lock().unwrap().push(tmp);
-        let node_id = 1;
+        let (_root, part) = mk_partition_owned("openraft_test_all");
+        let node_id = part.uuid().as_u64_pair().1;
         let log = TvrLogAdapter::new(part.clone(), node_id);
         let state = TvrPartitionStateMachine::new(part.clone())?;
         Ok(((), log, state))
     }
 }
 
+#[traced_test]
 #[test]
-pub fn test_mem_store() -> Result<(), StorageError<TvrNodeId>> {
-    Suite::test_all(TvrStoreBuilder::default())?;
+pub fn openraft_test_all() -> Result<(), StorageError<TvrNodeId>> {
+    Suite::test_all(TvrStoreBuilder {  })?;
     Ok(())
 }

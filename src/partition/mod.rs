@@ -5,7 +5,7 @@ pub mod retention;
 pub mod recovery;
 pub mod truncate;
 pub mod purge;
-pub mod common;
+pub mod misc;
 
 use crate::admin::stats::PartitionStats;
 use crate::config::PartitionConfig;
@@ -125,6 +125,7 @@ impl PartitionHandle {
         Ok(Self { inner: std::sync::Arc::new(inner) })
     }
 
+    pub fn uuid(&self) -> Uuid { self.inner.id }
     pub fn append(&self, order_key: u64, payload: &[u8]) -> Result<AppendAck> { append::append(self, order_key, payload) }
     pub fn read_range(&self, from_key: u64, to_key: u64) -> Result<Vec<u8>> { read::read_range_blocks(self, from_key, to_key) }
     pub fn force_roll(&self) -> Result<()> { roll::force_roll(self) }
@@ -136,6 +137,10 @@ impl PartitionHandle {
 
 impl PartitionHandle {
     pub fn id(&self) -> Uuid { self.inner.id }
+    pub fn short_id(&self) -> String {
+        let simple = self.inner.id.simple().to_string();
+        simple[simple.len() - 6..].to_string()
+    }
     pub fn root(&self) -> &PathBuf { &self.inner.root }
     pub fn cfg(&self) -> PartitionConfig { self.inner.cfg.read().clone() }
     #[cfg(test)]
