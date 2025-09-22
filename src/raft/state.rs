@@ -1,21 +1,22 @@
 use std::fmt::Debug;
 use std::io::Cursor;
+use std::marker::PhantomData;
 
-use crate::disk::atomic::atomic_write_json;
-use crate::raft::{paths, StorageResult, TvrConfig, TvrEntry, TvrNode, TvrNodeId, TvrResponse};
 use crate::PartitionHandle;
-use openraft::storage::RaftStateMachine;
-use openraft::storage::Snapshot;
-use openraft::EntryPayload;
+use crate::disk::atomic::atomic_write_json;
+use crate::raft::errors::se_new;
+use crate::raft::{StorageResult, TvrConfig, TvrNode, TvrNodeId, paths};
+use openraft::ErrorSubject;
+use openraft::ErrorVerb;
 use openraft::LogId;
 use openraft::OptionalSend;
 use openraft::RaftSnapshotBuilder;
 use openraft::SnapshotMeta;
 use openraft::StorageError;
 use openraft::StoredMembership;
-use openraft::ErrorSubject;
-use openraft::ErrorVerb;
-use crate::raft::errors::se_new;
+use openraft::storage::RaftStateMachine;
+use openraft::storage::Snapshot;
+use openraft::{Entry, EntryPayload};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -30,9 +31,8 @@ pub struct StoredSnapshot {
 }
 
 /// Stores all requests in a timevault partition.
-#[derive(Clone,Debug)]
-pub struct TvrPartitionStateMachine {
-
+#[derive(Debug)]
+pub struct TvrPartitionStateMachine<D, R> {
     pub partition_handle: PartitionHandle,
 
     pub data: StateMachineData,
@@ -42,6 +42,19 @@ pub struct TvrPartitionStateMachine {
     /// It is only used as a suffix of snapshot id, and should be globally unique.
     /// In practice, using a timestamp in micro-second would be good enough.
     snapshot_idx: u64,
+
+    _marker: PhantomData<(D, R)>,
+}
+
+impl<D, R> Clone for TvrPartitionStateMachine<D, R> {
+    fn clone(&self) -> Self {
+        Self {
+            partition_handle: self.partition_handle.clone(),
+            data: self.data.clone(),
+            snapshot_idx: self.snapshot_idx,
+            _marker: PhantomData,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -52,8 +65,12 @@ pub struct StateMachineData {
     // State built from applying the raft logs
 }
 
-impl RaftSnapshotBuilder<TvrConfig> for TvrPartitionStateMachine {
-    async fn build_snapshot(&mut self) -> Result<Snapshot<TvrConfig>, StorageError<TvrNodeId>> {
+impl<D, R> RaftSnapshotBuilder<TvrConfig<D, R>> for TvrPartitionStateMachine<D, R>
+where
+    D: openraft::AppData,
+    R: openraft::AppDataResponse,
+{
+    async fn build_snapshot(&mut self) -> Result<Snapshot<TvrConfig<D, R>>, StorageError<TvrNodeId>> {
         let last_applied_log = self.data.last_applied_log_id;
         let last_membership = self.data.last_membership.clone();
 
@@ -71,10 +88,7 @@ impl RaftSnapshotBuilder<TvrConfig> for TvrPartitionStateMachine {
 
         let data = vec![];
 
-        let snapshot = StoredSnapshot {
-            meta: meta.clone(),
-            data: data.clone(),
-        };
+        let snapshot = StoredSnapshot { meta: meta.clone(), data: data.clone() };
 
         self.set_current_snapshot_(snapshot)?;
 
@@ -85,9 +99,12 @@ impl RaftSnapshotBuilder<TvrConfig> for TvrPartitionStateMachine {
     }
 }
 
-impl TvrPartitionStateMachine {
-
-    pub fn new(partition_handle: PartitionHandle) -> Result<TvrPartitionStateMachine, StorageError<TvrNodeId>> {
+impl<D, R> TvrPartitionStateMachine<D, R>
+where
+    D: openraft::AppData,
+    R: openraft::AppDataResponse,
+{
+    pub fn new(partition_handle: PartitionHandle) -> Result<TvrPartitionStateMachine<D, R>, StorageError<TvrNodeId>> {
         let mut sm = Self {
             partition_handle,
             data: StateMachineData {
@@ -95,6 +112,7 @@ impl TvrPartitionStateMachine {
                 last_membership: Default::default(),
             },
             snapshot_idx: 0,
+            _marker: PhantomData,
         };
 
         let snapshot = sm.get_current_snapshot_()?;
@@ -105,10 +123,7 @@ impl TvrPartitionStateMachine {
         Ok(sm)
     }
 
-    fn update_state_machine_(
-        &mut self,
-        snapshot: StoredSnapshot,
-    ) -> Result<(), StorageError<TvrNodeId>> {
+    fn update_state_machine_(&mut self, snapshot: StoredSnapshot) -> Result<(), StorageError<TvrNodeId>> {
         self.data.last_applied_log_id = snapshot.meta.last_log_id;
         self.data.last_membership = snapshot.meta.last_membership.clone();
 
@@ -135,35 +150,24 @@ impl TvrPartitionStateMachine {
     }
 
     fn set_current_snapshot_(&self, snap: StoredSnapshot) -> StorageResult<()> {
-        atomic_write_json(
-            paths::state_file(&self.partition_handle),
-            &snap,
-        )
-        .map_err(|e| se_new(ErrorSubject::Store, ErrorVerb::Write, &e.to_string()))
+        atomic_write_json(paths::state_file(&self.partition_handle), &snap).map_err(|e| se_new(ErrorSubject::Store, ErrorVerb::Write, &e.to_string()))
     }
 }
 
-impl RaftStateMachine<TvrConfig> for TvrPartitionStateMachine {
+impl<D, R> RaftStateMachine<TvrConfig<D, R>> for TvrPartitionStateMachine<D, R>
+where
+    D: openraft::AppData,
+    R: openraft::AppDataResponse + Default,
+{
     type SnapshotBuilder = Self;
 
-    async fn applied_state(
-        &mut self,
-    ) -> Result<
-        (
-            Option<LogId<TvrNodeId>>,
-            StoredMembership<TvrNodeId, TvrNode>,
-        ),
-        StorageError<TvrNodeId>,
-    > {
-        Ok((
-            self.data.last_applied_log_id,
-            self.data.last_membership.clone(),
-        ))
+    async fn applied_state(&mut self) -> Result<(Option<LogId<TvrNodeId>>, StoredMembership<TvrNodeId, TvrNode>), StorageError<TvrNodeId>> {
+        Ok((self.data.last_applied_log_id, self.data.last_membership.clone()))
     }
 
-    async fn apply<I>(&mut self, entries: I) -> Result<Vec<TvrResponse>, StorageError<TvrNodeId>>
+    async fn apply<I>(&mut self, entries: I) -> Result<Vec<R>, StorageError<TvrNodeId>>
     where
-        I: IntoIterator<Item = TvrEntry> + OptionalSend,
+        I: IntoIterator<Item = Entry<TvrConfig<D, R>>> + OptionalSend,
         I::IntoIter: OptionalSend,
     {
         let entries = entries.into_iter();
@@ -177,19 +181,19 @@ impl RaftStateMachine<TvrConfig> for TvrPartitionStateMachine {
             match ent.payload {
                 EntryPayload::Blank => {}
                 EntryPayload::Normal(_req) => {} // match req {
-                    // TvrRequest::Set { key, value } => {
-                    //     resp_value = Some(value.clone());
-                    //
-                    //     let mut st = self.data.kvs.write().await;
-                    //     st.insert(key, value);
-                    // }
+                // TvrRequest::Set { key, value } => {
+                //     resp_value = Some(value.clone());
+                //
+                //     let mut st = self.data.kvs.write().await;
+                //     st.insert(key, value);
+                // }
                 // },
                 EntryPayload::Membership(mem) => {
                     self.data.last_membership = StoredMembership::new(Some(ent.log_id), mem);
                 }
             }
 
-            replies.push(TvrResponse { 0: Ok(serde_json::Value::Null) });
+            replies.push(R::default());
         }
 
         Ok(replies)
@@ -200,17 +204,11 @@ impl RaftStateMachine<TvrConfig> for TvrPartitionStateMachine {
         self.clone()
     }
 
-    async fn begin_receiving_snapshot(
-        &mut self,
-    ) -> Result<Box<Cursor<Vec<u8>>>, StorageError<TvrNodeId>> {
+    async fn begin_receiving_snapshot(&mut self) -> Result<Box<Cursor<Vec<u8>>>, StorageError<TvrNodeId>> {
         Ok(Box::new(Cursor::new(Vec::new())))
     }
 
-    async fn install_snapshot(
-        &mut self,
-        meta: &SnapshotMeta<TvrNodeId, TvrNode>,
-        snapshot: Box<SnapshotData>,
-    ) -> Result<(), StorageError<TvrNodeId>> {
+    async fn install_snapshot(&mut self, meta: &SnapshotMeta<TvrNodeId, TvrNode>, snapshot: Box<SnapshotData>) -> Result<(), StorageError<TvrNodeId>> {
         let new_snapshot = StoredSnapshot {
             meta: meta.clone(),
             data: snapshot.into_inner(),
@@ -223,9 +221,7 @@ impl RaftStateMachine<TvrConfig> for TvrPartitionStateMachine {
         Ok(())
     }
 
-    async fn get_current_snapshot(
-        &mut self,
-    ) -> Result<Option<Snapshot<TvrConfig>>, StorageError<TvrNodeId>> {
+    async fn get_current_snapshot(&mut self) -> Result<Option<Snapshot<TvrConfig<D, R>>>, StorageError<TvrNodeId>> {
         let x = self.get_current_snapshot_()?;
         Ok(x.map(|s| Snapshot {
             meta: s.meta.clone(),
