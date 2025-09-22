@@ -1,4 +1,4 @@
-use std::fs::{OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use uuid::Uuid;
@@ -7,9 +7,9 @@ use crate::disk::index::{IndexLine, load_index_lines};
 use crate::disk::manifest::{ManifestLine, load_manifest};
 use crate::errors::{Result, TvError};
 use crate::partition::PartitionHandle;
+use crate::partition::misc;
 use crate::plugins::FormatPlugin;
 use crate::store::paths;
-use crate::partition::misc;
 
 pub fn purge(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
     misc::ensure_writable(h)?;
@@ -22,7 +22,9 @@ pub fn purge(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
     crate::disk::atomic::atomic_write_json(&meta_path, &meta)?;
 
     // If configured as logical purge, return immediately after persisting last_purge_id
-    if meta.logical_purge { return Ok(()); }
+    if meta.logical_purge {
+        return Ok(());
+    }
 
     // Physical purge path
     purge_partition_dir(&p.part_dir, cutoff_key, &*plugin)?;
@@ -37,7 +39,9 @@ pub fn purge_partition_dir(part_dir: &std::path::Path, cutoff_key: u64, plugin: 
     let manifest_path = paths::partition_manifest(part_dir);
     let chunks_dir = paths::chunks_dir(part_dir);
     let manifest = load_manifest(&manifest_path)?;
-    if manifest.is_empty() { return Ok(()); }
+    if manifest.is_empty() {
+        return Ok(());
+    }
 
     // Build new manifest and deletion list
     let mut new_manifest: Vec<ManifestLine> = Vec::new();
@@ -52,7 +56,7 @@ pub fn purge_partition_dir(part_dir: &std::path::Path, cutoff_key: u64, plugin: 
                 if max <= cutoff_key {
                     to_delete.push(m.chunk_id);
                 } else if m.min_order_key > cutoff_key {
-                    if overlap_idx.is_none() { }
+                    if overlap_idx.is_none() {}
                     new_manifest.push(m.clone());
                 } else {
                     overlap_idx = Some(i);
@@ -95,15 +99,11 @@ pub fn purge_partition_dir(part_dir: &std::path::Path, cutoff_key: u64, plugin: 
 
 // Purge records from the start of chunk up to and including cutoff_key.
 // Returns: (kept_any, new_min_key, was_closed_max)
-fn purge_chunk_from_start(
-    chunks_dir: &std::path::Path,
-    chunk_id: Uuid,
-    cutoff_key: u64,
-    was_closed_max: Option<u64>,
-    plugin: &dyn FormatPlugin,
-) -> Result<(bool, Option<u64>, Option<u64>)> {
+fn purge_chunk_from_start(chunks_dir: &std::path::Path, chunk_id: Uuid, cutoff_key: u64, was_closed_max: Option<u64>, plugin: &dyn FormatPlugin) -> Result<(bool, Option<u64>, Option<u64>)> {
     let chunk_path = paths::chunk_file(chunks_dir, chunk_id);
-    if !chunk_path.exists() { return Err(TvError::MissingFile { path: chunk_path }); }
+    if !chunk_path.exists() {
+        return Err(TvError::MissingFile { path: chunk_path });
+    }
     let index_path = paths::index_file(chunks_dir, chunk_id);
 
     // Load the existing index
@@ -130,17 +130,28 @@ fn purge_chunk_from_start(
     let mut first_kept_key: Option<u64> = None;
     let mut copy_start: Option<u64> = None;
     while let Some(m) = scanner.next()? {
-        if (m.ts_ms as u64) > cutoff_key { first_kept_key = Some(m.ts_ms as u64); copy_start = Some(m.offset); break; }
+        if (m.ts_ms as u64) > cutoff_key {
+            first_kept_key = Some(m.ts_ms as u64);
+            copy_start = Some(m.offset);
+            break;
+        }
     }
 
     // If nothing remains after purge
-    let copy_start = match copy_start { Some(v) => v, None => {
-        // Truncate index to empty and return kept_any=false
-        if index_path.exists() { crate::disk::index::rewrite_index_atomic(&index_path, &[])?; }
-        // Truncate file to 0
-        let cf = OpenOptions::new().write(true).open(&chunk_path)?; cf.set_len(0)?; let _ = cf.sync_all();
-        return Ok((false, None, was_closed_max));
-    }};
+    let copy_start = match copy_start {
+        Some(v) => v,
+        None => {
+            // Truncate index to empty and return kept_any=false
+            if index_path.exists() {
+                crate::disk::index::rewrite_index_atomic(&index_path, &[])?;
+            }
+            // Truncate file to 0
+            let cf = OpenOptions::new().write(true).open(&chunk_path)?;
+            cf.set_len(0)?;
+            let _ = cf.sync_all();
+            return Ok((false, None, was_closed_max));
+        }
+    };
 
     // Copy tail [copy_start..EOF] into tmp and atomically replace
     let new_len = rewrite_file_from_offset(&chunk_path, copy_start)?;
@@ -163,8 +174,9 @@ fn purge_chunk_from_start(
             });
         }
     } else {
-        // No kept index blocks; the first segment will extend to EOF after we synthesize it
-        leading_end_off = new_len;
+        // No kept index blocks remain. Only synthesize a covering block when the chunk was closed;
+        // open chunks purposely leave their trailing portion unindexed so cadence can rebuild it later.
+        leading_end_off = if was_closed_max.is_some() { new_len } else { 0 };
     }
 
     // If there is a leading segment starting at 0 up to leading_end_off, synthesize block for it
@@ -175,17 +187,24 @@ fn purge_chunk_from_start(
         s2.seek_to(0)?;
         let mut last_key = first_kept_key.unwrap();
         while let Some(m) = s2.next()? {
-            if m.offset >= leading_end_off { break; }
+            if m.offset >= leading_end_off {
+                break;
+            }
             last_key = m.ts_ms as u64;
             let end = m.offset + m.len as u64;
-            if end >= leading_end_off { break; }
+            if end >= leading_end_off {
+                break;
+            }
         }
-        new_index.insert(0, IndexLine {
-            block_min_key: first_kept_key.unwrap(),
-            block_max_key: last_key,
-            file_offset_bytes: 0,
-            block_len_bytes: leading_end_off,
-        });
+        new_index.insert(
+            0,
+            IndexLine {
+                block_min_key: first_kept_key.unwrap(),
+                block_max_key: last_key,
+                file_offset_bytes: 0,
+                block_len_bytes: leading_end_off,
+            },
+        );
     }
 
     // Trailing coverage note:
@@ -210,13 +229,18 @@ fn rewrite_file_from_offset(path: &std::path::Path, start_off: u64) -> Result<u6
     let mut total: u64 = 0;
     loop {
         let n = src.read(&mut buf)?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         dst.write_all(&buf[..n])?;
         total += n as u64;
     }
-    dst.flush()?; let _ = dst.sync_all();
+    dst.flush()?;
+    let _ = dst.sync_all();
     std::fs::rename(&tmp, path)?;
-    if let Some(dir) = path.parent() { let _ = crate::store::fsync::fsync_dir(dir); }
+    if let Some(dir) = path.parent() {
+        let _ = crate::store::fsync::fsync_dir(dir);
+    }
     // Ensure new file size is set (rename preserves size)
     Ok(total)
 }
