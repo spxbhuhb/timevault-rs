@@ -1,25 +1,20 @@
 use crate::PartitionHandle;
 use crate::config::PartitionConfig;
-use crate::raft::{paths, TvrConfig, TvrNodeId};
-use openraft::{RaftLogReader, StorageError};
+use crate::raft::errors::recv_unit;
+use crate::raft::log::*;
+use crate::raft::{TvrNodeId, ValueConfig, ValueLogAdapter, ValueRequest, ValueResponse, ValueStateMachine, paths};
+use crate::testing::test_dir;
 use openraft::storage::RaftLogStorage;
-use openraft::{
-    BasicNode, CommittedLeaderId, Entry, EntryPayload, ErrorSubject, ErrorVerb, LogId, Membership,
-    Vote,
-};
+use openraft::testing::{StoreBuilder, Suite};
+use openraft::{BasicNode, CommittedLeaderId, Entry, EntryPayload, ErrorSubject, ErrorVerb, LogId, Membership, Vote};
+use openraft::{RaftLogReader, StorageError};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
-use openraft::testing::{StoreBuilder, Suite};
 use tempfile::TempDir;
 #[cfg(feature = "traced-tests")]
 use tracing_test::traced_test;
 use uuid::Uuid;
-use crate::raft::TvrRequest;
-use crate::raft::log::*;
-use crate::raft::errors::recv_unit;
-use crate::raft::state::TvrPartitionStateMachine;
-use crate::testing::test_dir;
 
 fn mk_partition(tmp: &TempDir) -> PartitionHandle {
     let root = tmp.path().to_path_buf();
@@ -29,13 +24,15 @@ fn mk_partition(tmp: &TempDir) -> PartitionHandle {
     PartitionHandle::create(root, id, cfg).expect("create partition")
 }
 
-fn mk_nodeid(n: u64) -> u64 { n }
+fn mk_nodeid(n: u64) -> u64 {
+    n
+}
 
 fn mk_log_id(term: u64, node: TvrNodeId, index: u64) -> LogId<TvrNodeId> {
     LogId::new(CommittedLeaderId::new(term, node), index)
 }
 
-fn mk_partition_owned(test_name : &str) -> (PathBuf, PartitionHandle) {
+fn mk_partition_owned(test_name: &str) -> (PathBuf, PartitionHandle) {
     let uuid = Uuid::now_v7();
     let root = test_dir(test_name, uuid);
     let mut cfg = PartitionConfig::default();
@@ -49,19 +46,16 @@ fn test_encode_entry_roundtrip_fields() {
     let node = mk_nodeid(0xB0);
     let log_id = mk_log_id(3, node, 7);
     let payload = serde_json::json!({"value": 42});
-    let entry = Entry {
+    let entry: Entry<ValueConfig> = Entry {
         log_id,
-        payload: EntryPayload::Normal(TvrRequest(payload.clone())),
+        payload: EntryPayload::Normal(payload.clone()),
     };
 
     let buf = encode_entry(&entry);
     assert!(buf.ends_with(b"\n"));
 
     let record: serde_json::Value = serde_json::from_slice(&buf[..buf.len() - 1]).unwrap();
-    assert_eq!(
-        record["timestamp"].as_i64(),
-        Some(entry.log_id.index as i64)
-    );
+    assert_eq!(record["timestamp"].as_i64(), Some(entry.log_id.index as i64));
     assert_eq!(record["log_id"]["index"].as_u64(), Some(entry.log_id.index));
     assert_eq!(record["kind"], serde_json::json!("Normal"));
     assert_eq!(record["payload"], payload);
@@ -76,7 +70,7 @@ fn test_decode_entries_handles_membership_and_filters() {
     let mut members = BTreeMap::new();
     members.insert(node, BasicNode::default());
     let membership = Membership::new(vec![BTreeSet::from([node])], members);
-    let entries = vec![
+    let entries: Vec<Entry<ValueConfig>> = vec![
         Entry {
             log_id: log_id1,
             payload: EntryPayload::Blank,
@@ -91,7 +85,7 @@ fn test_decode_entries_handles_membership_and_filters() {
         buf.extend_from_slice(&encode_entry(entry));
     }
 
-    let decoded = decode_entries(&part, &buf, log_id2.index..=log_id2.index);
+    let decoded: Vec<Entry<ValueConfig>> = decode_entries(&part, &buf, log_id2.index..=log_id2.index);
     assert_eq!(decoded.len(), 1);
     assert_eq!(decoded[0].log_id, log_id2);
     match &decoded[0].payload {
@@ -99,7 +93,7 @@ fn test_decode_entries_handles_membership_and_filters() {
         _ => panic!("expected membership entry"),
     }
 
-    let decoded_empty = decode_entries(&part, b"notjson\n", 0..=10);
+    let decoded_empty: Vec<Entry<ValueConfig>> = decode_entries(&part, b"notjson\n", 0..=10);
     assert!(decoded_empty.is_empty());
 }
 
@@ -141,23 +135,22 @@ fn test_get_state_reports_last_ids() {
     let node = mk_nodeid(0xE3);
     let log_id1 = mk_log_id(1, node, 1);
     let log_id2 = mk_log_id(2, node, 2);
-    let entries = [
+    let entries: [Entry<ValueConfig>; 2] = [
         Entry {
             log_id: log_id1,
-            payload: EntryPayload::Normal(TvrRequest(serde_json::json!({"a": 1}))),
+            payload: EntryPayload::Normal(serde_json::json!({"a": 1})),
         },
         Entry {
             log_id: log_id2,
-            payload: EntryPayload::Normal(TvrRequest(serde_json::json!({"b": 2}))),
+            payload: EntryPayload::Normal(serde_json::json!({"b": 2})),
         },
     ];
     for entry in &entries {
-        part.append(entry.log_id.index, &encode_entry(entry))
-            .unwrap();
+        part.append(entry.log_id.index, &encode_entry(entry)).unwrap();
     }
 
     save_purge_file(&part, &log_id1).unwrap();
-    let state = get_state(&part).unwrap();
+    let state = get_state::<ValueRequest, ValueResponse>(&part).unwrap();
     assert_eq!(state.last_purged_log_id, Some(log_id1));
     assert_eq!(state.last_log_id, Some(log_id2));
 }
@@ -192,12 +185,12 @@ fn test_decode_entries_roundtrip_and_filter() {
         buf.extend_from_slice(&line);
     }
 
-    let out = decode_entries(&part, &buf, 2..=3);
+    let out: Vec<Entry<ValueConfig>> = decode_entries(&part, &buf, 2..=3);
     assert_eq!(out.len(), 2);
     assert_eq!(out[0].log_id.index, 2);
     assert_eq!(out[1].log_id.index, 3);
     match &out[0].payload {
-        EntryPayload::Normal(TvrRequest(v)) => assert_eq!(v["b"], serde_json::json!(2)),
+        EntryPayload::Normal(v) => assert_eq!(v["b"], serde_json::json!(2)),
         _ => panic!("unexpected payload"),
     }
 }
@@ -206,7 +199,7 @@ fn test_decode_entries_roundtrip_and_filter() {
 async fn test_empty_partition_state_and_reads() {
     let td = TempDir::new().unwrap();
     let part = mk_partition(&td);
-    let mut ad = TvrLogAdapter::new(part.clone(), 1);
+    let mut ad = ValueLogAdapter::new(part.clone(), 1);
 
     let st = ad.get_log_state().await.expect("get_log_state");
     assert!(st.last_log_id.is_none());
@@ -226,15 +219,14 @@ async fn test_empty_partition_state_and_reads() {
     assert!(!paths::purge_file(&part).exists());
 }
 
-struct TvrStoreBuilder { }
+struct TvrStoreBuilder {}
 
-
-impl StoreBuilder<TvrConfig, TvrLogAdapter, TvrPartitionStateMachine, ()> for TvrStoreBuilder {
-    async fn build(&self) -> Result<((), TvrLogAdapter,TvrPartitionStateMachine), StorageError<TvrNodeId>> {
+impl StoreBuilder<ValueConfig, ValueLogAdapter, ValueStateMachine, ()> for TvrStoreBuilder {
+    async fn build(&self) -> Result<((), ValueLogAdapter, ValueStateMachine), StorageError<TvrNodeId>> {
         let (_root, part) = mk_partition_owned("openraft_test_all");
         let node_id = part.id().as_u64_pair().1;
-        let log = TvrLogAdapter::new(part.clone(), node_id);
-        let state = TvrPartitionStateMachine::new(part.clone())?;
+        let log = ValueLogAdapter::new(part.clone(), node_id);
+        let state = ValueStateMachine::new(part.clone())?;
         Ok(((), log, state))
     }
 }
@@ -242,7 +234,7 @@ impl StoreBuilder<TvrConfig, TvrLogAdapter, TvrPartitionStateMachine, ()> for Tv
 #[cfg_attr(feature = "traced-tests", traced_test)]
 #[test]
 fn openraft_test_all() -> Result<(), StorageError<TvrNodeId>> {
-    Suite::test_all(TvrStoreBuilder {  })?;
+    Suite::test_all(TvrStoreBuilder {})?;
     Ok(())
 }
 
