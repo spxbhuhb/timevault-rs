@@ -91,6 +91,9 @@ impl PartitionHandle {
             runtime: RwLock::new(rt),
             read_only: false,
         };
+
+        tracing::debug!("Created partition {}", id);
+        
         Ok(Self { inner: std::sync::Arc::new(inner) })
     }
 

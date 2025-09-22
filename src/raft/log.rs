@@ -210,7 +210,7 @@ pub(crate) fn get_state(part: &PartitionHandle) -> Result<LogState<TvrConfig>, T
         let rec = serde_json::from_slice::<JsonlRecord>(&*last)?;
         last_log_id = Some(rec.log_id);
     } else {
-        last_log_id = None;
+        last_log_id = purge;
     }
 
     trace!("get_state: last_log_id={:?}, purge={:?}", last_log_id, purge);
@@ -281,6 +281,11 @@ impl RaftLogReader<TvrConfig> for TvrLogAdapter {
         };
 
         trace!("try_get_log_entries {}..{}", start, end);
+
+        if start > end {
+            // OpenRaft accepts ranges like 3..3 which should return an empty list.
+            return Ok(Vec::new());
+        }
 
         let (rtx, rrx) = channel();
         self.tx

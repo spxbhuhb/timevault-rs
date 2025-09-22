@@ -3,7 +3,7 @@ use openraft::{BasicNode, Entry, StorageError, TokioRuntime};
 use serde::{Deserialize, Serialize};
 
 pub mod log;
-mod state;
+pub mod state;
 mod paths;
 mod errors;
 

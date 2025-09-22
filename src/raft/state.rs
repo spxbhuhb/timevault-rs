@@ -87,7 +87,7 @@ impl RaftSnapshotBuilder<TvrConfig> for TvrPartitionStateMachine {
 
 impl TvrPartitionStateMachine {
 
-    pub(crate) fn new(partition_handle: PartitionHandle) -> Result<TvrPartitionStateMachine, StorageError<TvrNodeId>> {
+    pub fn new(partition_handle: PartitionHandle) -> Result<TvrPartitionStateMachine, StorageError<TvrNodeId>> {
         let mut sm = Self {
             partition_handle,
             data: StateMachineData {

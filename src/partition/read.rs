@@ -1,6 +1,6 @@
 use crate::disk::index::{IndexLine, load_index_lines};
 use crate::disk::manifest::{ManifestLine, load_manifest};
-use crate::errors::{TvError, Result};
+use crate::errors::{Result, TvError};
 use crate::partition::PartitionHandle;
 use crate::store::paths;
 use std::fs::File;
@@ -12,17 +12,23 @@ use uuid::Uuid;
 /// The function intentionally returns with the whole blocks and lets the caller scan and
 /// drop the unnecessary records in that block.
 pub fn read_range_blocks(h: &PartitionHandle, from_key: u64, to_key: u64) -> Result<Vec<u8>> {
-    if from_key > to_key { return Err(TvError::InvalidRange { from: from_key as i64, to: to_key as i64 }); }
+    if from_key > to_key {
+        return Err(TvError::InvalidRange { from: from_key as i64, to: to_key as i64 });
+    }
     let part_dir = paths::partition_dir(h.root(), h.id());
     let chunks_dir = paths::chunks_dir(&part_dir);
     let manifest_path = paths::partition_manifest(&part_dir);
-    if !manifest_path.exists() { return Err(TvError::MissingFile { path: manifest_path }); }
+    if !manifest_path.exists() {
+        return Err(TvError::MissingFile { path: manifest_path });
+    }
 
     let manifest = load_manifest(&manifest_path)?;
     let mut out = Vec::new();
     for m in select_chunks(&manifest, from_key, to_key) {
         let chunk_path = paths::chunk_file(&chunks_dir, m.chunk_id);
-        if !chunk_path.exists() { return Err(TvError::MissingFile { path: chunk_path }); }
+        if !chunk_path.exists() {
+            return Err(TvError::MissingFile { path: chunk_path });
+        }
         if is_fully_covered(&m, from_key, to_key) {
             append_entire_file(&chunk_path, &mut out)?;
             continue;
@@ -32,21 +38,27 @@ pub fn read_range_blocks(h: &PartitionHandle, from_key: u64, to_key: u64) -> Res
     Ok(out)
 }
 
-
 fn select_chunks(manifest: &[ManifestLine], from_key: u64, to_key: u64) -> Vec<ManifestLine> {
     let mut out = Vec::new();
     for m in manifest {
         if let Some(max) = m.max_order_key {
-            if m.min_order_key <= to_key && max >= from_key { out.push(m.clone()); }
+            if m.min_order_key <= to_key && max >= from_key {
+                out.push(m.clone());
+            }
         } else {
-            if m.min_order_key <= to_key { out.push(m.clone()); }
+            if m.min_order_key <= to_key {
+                out.push(m.clone());
+            }
         }
     }
     out
 }
 
 fn is_fully_covered(m: &ManifestLine, from_key: u64, to_key: u64) -> bool {
-    match m.max_order_key { Some(max) => m.min_order_key >= from_key && max <= to_key, None => false }
+    match m.max_order_key {
+        Some(max) => m.min_order_key >= from_key && max <= to_key,
+        None => false,
+    }
 }
 
 fn append_entire_file(path: &std::path::Path, out: &mut Vec<u8>) -> Result<()> {
@@ -74,7 +86,9 @@ fn append_indexed_ranges(chunks_dir: &std::path::Path, chunk_id: Uuid, from_key:
             }
         } else {
             // No index entries; include entire file as a single range.
-            if file_len > 0 { ranges.push((0, file_len)); }
+            if file_len > 0 {
+                ranges.push((0, file_len));
+            }
         }
     }
     read_and_append_ranges(&mut f, &ranges, out)?;
@@ -86,9 +100,14 @@ fn select_block_ranges(idx: &[IndexLine], from_key: u64, to_key: u64) -> Vec<(u6
     let mut started = false;
     for b in idx {
         if !started {
-            if b.block_max_key >= from_key { started = true; ranges.push((b.file_offset_bytes, b.block_len_bytes)); }
+            if b.block_max_key >= from_key {
+                started = true;
+                ranges.push((b.file_offset_bytes, b.block_len_bytes));
+            }
         } else {
-            if b.block_min_key > to_key { break; }
+            if b.block_min_key > to_key {
+                break;
+            }
             ranges.push((b.file_offset_bytes, b.block_len_bytes));
         }
     }
@@ -109,7 +128,9 @@ fn read_range_into(f: &mut File, off: u64, len: u64, tmp: &mut [u8], out: &mut V
     while remaining > 0 {
         let to_read = remaining.min(tmp.len());
         let n = f.read(&mut tmp[..to_read])?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         out.extend_from_slice(&tmp[..n]);
         remaining -= n;
     }

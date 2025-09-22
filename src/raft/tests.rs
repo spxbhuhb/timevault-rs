@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use openraft::testing::{StoreBuilder, Suite};
 use tempfile::TempDir;
+#[cfg(feature = "traced-tests")]
 use tracing_test::traced_test;
 use uuid::Uuid;
 use crate::raft::TvrRequest;
@@ -238,10 +239,22 @@ impl StoreBuilder<TvrConfig, TvrLogAdapter, TvrPartitionStateMachine, ()> for Tv
     }
 }
 
-#[traced_test]
-#[tokio::test(flavor = "multi_thread")]
-async fn openraft_test_all() {
-    //Suite::test_all(TvrStoreBuilder {  })?;
-    let (_, l, s) = TvrStoreBuilder { }.build().await.expect("build");
-    Suite::<TvrConfig,TvrLogAdapter,TvrPartitionStateMachine, TvrStoreBuilder, ()>::get_initial_state_log_ids(l,s).await.expect("get_initial_state_log_ids");
+#[cfg_attr(feature = "traced-tests", traced_test)]
+#[test]
+fn openraft_test_all() -> Result<(), StorageError<TvrNodeId>> {
+    Suite::test_all(TvrStoreBuilder {  })?;
+    Ok(())
 }
+
+// #[traced_test]
+// #[tokio::test(flavor = "multi_thread")]
+// async fn openraft_test_single() {
+//     let (_, l, s) = TvrStoreBuilder { }.build().await.expect("build");
+//     Suite::<TvrConfig,TvrLogAdapter,TvrPartitionStateMachine, TvrStoreBuilder, ()>::get_initial_state_log_ids(l,s).await.expect("get_initial_state_log_ids");
+// }
+
+// #[traced_test]
+// #[tokio::test(flavor = "multi_thread")]
+// async fn openraft_test_transfer_snapshot() {
+//     Suite::transfer_snapshot(&TvrStoreBuilder { }).await.expect("transfer_snapshot");
+// }
