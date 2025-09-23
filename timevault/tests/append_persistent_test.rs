@@ -1,11 +1,9 @@
 use std::fs;
 use uuid::Uuid;
-
+use test_utils::test_dir;
 use timevault::store::paths;
 use timevault::PartitionHandle;
 use timevault::disk::manifest::ManifestLine;
-
-mod common;
 
 // This test intentionally keeps its outputs on disk under target/test so they can be
 // manually inspected after `cargo test`. Other tests continue to use TempDir.
@@ -20,7 +18,7 @@ fn enc(ts: i64, value: serde_json::Value) -> Vec<u8> {
 fn append_persistent_outputs_under_target_test() {
 
     let id = Uuid::now_v7();
-    let root = common::test_dir("append_persistent");
+    let root = test_dir("append_persistent", id);
 
     // Prepare partition dir and metadata with small max_bytes to allow small chunks
     let part_dir = paths::partition_dir(&root, id);

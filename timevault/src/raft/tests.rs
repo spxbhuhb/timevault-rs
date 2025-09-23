@@ -5,7 +5,6 @@ use crate::config::PartitionConfig;
 use crate::raft::errors::recv_unit;
 use crate::raft::log::*;
 use crate::raft::{TvrNodeId, paths, TvrConfig, state};
-use crate::testing::test_dir;
 use openraft::storage::RaftLogStorage;
 use openraft::testing::{StoreBuilder, Suite};
 use openraft::{BasicNode, CommittedLeaderId, Entry, EntryPayload, ErrorSubject, ErrorVerb, LogId, Membership, Vote};
@@ -18,6 +17,7 @@ use tempfile::TempDir;
 #[cfg(feature = "traced-tests")]
 use tracing_test::traced_test;
 use uuid::Uuid;
+use test_utils::test_dir;
 
 pub type ValueRequest = serde_json::Value;
 

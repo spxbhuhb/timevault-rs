@@ -1,4 +1,3 @@
-pub mod open;
 pub mod paths;
 pub mod locks;
 pub mod fsync;

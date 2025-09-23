@@ -16,7 +16,7 @@ fn stress_parallel_append_and_read() {
 
     // Persist outputs under ./target/test similar to append_persistent_test
     let project_root = project_root();
-    let tests_root = project_root.join("target").join("test");
+    let tests_root = project_root.join("../target").join("test");
     fs::create_dir_all(&tests_root).unwrap();
 
     // Clear previous runs for this test to avoid accumulation

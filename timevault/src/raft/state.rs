@@ -62,7 +62,7 @@ pub struct StateMachineData {
     pub last_applied_log_id: Option<LogId<TvrNodeId>>,
 
     pub last_membership: StoredMembership<TvrNodeId, TvrNode>,
-    // State built from applying the raft logs
+    // State built from applying the openraft-example logs
 }
 
 impl<D, R> RaftSnapshotBuilder<TvrConfig<D, R>> for TvrPartitionStateMachine<D, R>
