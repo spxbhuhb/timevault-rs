@@ -6,7 +6,8 @@ the necessary mapping.
 - targeted minimum OpenRaft version is: 0.9.21
 - one OpenRaft node per timevault partition
 
-- The adapter should implement `RaftLogStorage` and `RaftLogReader` with the following details.
+- The adapter should implement `RaftLogStorage` and expose a dedicated type that implements
+  `RaftLogReader` with the following details.
 - The adapter should not implement `RaftStateStorage`.
 
 ## Mapping
@@ -32,7 +33,8 @@ a format plugin is required.
 - Module name: `raft`
 - Required feature: none, the module is included by default
 - Adapter struct name: `TvrLogAdapter`
-  - implements both `RaftLogStorage` and `RaftLogReader`
+  - implements `RaftLogStorage`
+  - provides a `TvrLogReader` that implements `RaftLogReader`
   - contains all necessary data for the adapter to operate
 - Define `RaftTypeConfig` with these types:
   - `D`: `Request(serde_json::Value)` (define the struct Request)
