@@ -39,6 +39,40 @@ where
     Shutdown,
 }
 
+pub struct TvrLogReader<D, R>
+where
+    D: serde::Serialize + DeserializeOwned + openraft::AppData,
+    R: openraft::AppDataResponse,
+{
+    part: PartitionHandle,
+    tx: SyncSender<Op<D, R>>,
+    _marker: PhantomData<(D, R)>,
+}
+
+impl<D, R> TvrLogReader<D, R>
+where
+    D: serde::Serialize + DeserializeOwned + openraft::AppData,
+    R: openraft::AppDataResponse,
+{
+    fn new(part: PartitionHandle, tx: SyncSender<Op<D, R>>) -> Self {
+        Self { part, tx, _marker: PhantomData }
+    }
+}
+
+impl<D, R> Clone for TvrLogReader<D, R>
+where
+    D: serde::Serialize + DeserializeOwned + openraft::AppData,
+    R: openraft::AppDataResponse,
+{
+    fn clone(&self) -> Self {
+        Self {
+            part: self.part.clone(),
+            tx: self.tx.clone(),
+            _marker: PhantomData,
+        }
+    }
+}
+
 pub struct TvrLogAdapter<D, R>
 where
     D: serde::Serialize + DeserializeOwned + openraft::AppData,
@@ -296,12 +330,15 @@ pub(crate) fn read_purge_file(part: &PartitionHandle) -> Result<Option<LogId<Tvr
     Ok(Some(v.last_deleted))
 }
 
-impl<D, R> RaftLogReader<TvrConfig<D, R>> for TvrLogAdapter<D, R>
+impl<D, R> RaftLogReader<TvrConfig<D, R>> for TvrLogReader<D, R>
 where
     D: serde::Serialize + DeserializeOwned + openraft::AppData,
     R: openraft::AppDataResponse,
 {
-    async fn try_get_log_entries<RB: std::ops::RangeBounds<u64> + Send>(&mut self, range: RB) -> Result<Vec<Entry<TvrConfig<D, R>>>, StorageError<TvrNodeId>> {
+    async fn try_get_log_entries<RB: std::ops::RangeBounds<u64> + Clone + std::fmt::Debug + openraft::OptionalSend>(
+        &mut self,
+        range: RB,
+    ) -> Result<Vec<Entry<TvrConfig<D, R>>>, StorageError<TvrNodeId>> {
         use std::ops::Bound::*;
         let start = match range.start_bound() {
             Included(a) => *a,
@@ -333,7 +370,7 @@ where
     D: serde::Serialize + DeserializeOwned + openraft::AppData,
     R: openraft::AppDataResponse,
 {
-    type LogReader = Self;
+    type LogReader = TvrLogReader<D, R>;
 
     async fn get_log_state(&mut self) -> Result<LogState<TvrConfig<D, R>>, StorageError<TvrNodeId>> {
         let (rtx, rrx) = channel();
@@ -342,7 +379,7 @@ where
     }
 
     async fn get_log_reader(&mut self) -> Self::LogReader {
-        self.clone()
+        TvrLogReader::new(self.part.clone(), self.tx.clone())
     }
 
     async fn save_vote(&mut self, vote: &Vote<TvrNodeId>) -> Result<(), StorageError<TvrNodeId>> {
