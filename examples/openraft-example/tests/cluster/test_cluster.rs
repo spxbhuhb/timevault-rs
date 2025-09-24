@@ -8,11 +8,11 @@ use std::time::Duration;
 use maplit::btreemap;
 use maplit::btreeset;
 use openraft::BasicNode;
+use openraft_example::client::ExampleClient;
+use openraft_example::start_example_raft_node;
 use serde_json::json;
 use tokio::runtime::Runtime;
 use tracing_subscriber::EnvFilter;
-use openraft_example::client::ExampleClient;
-use openraft_example::{start_example_raft_node};
 
 #[allow(deprecated)]
 pub fn log_panic(panic: &PanicInfo) {
@@ -60,9 +60,8 @@ async fn test_cluster() -> anyhow::Result<()> {
         log_panic(panic);
     }));
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"))
-        .add_directive("timevault::raft::log=trace".parse()?);
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // .add_directive("timevault::raft::log=trace".parse()?);
 
     tracing_subscriber::fmt()
         .with_target(true)
@@ -77,7 +76,7 @@ async fn test_cluster() -> anyhow::Result<()> {
     // Clear the root directory recursively to ensure a clean test environment
     let _ = std::fs::remove_dir_all(root);
     std::fs::create_dir_all(root)?;
-    
+
     let get_addr = |node_id| {
         let addr = match node_id {
             1 => "127.0.0.1:21001".to_string(),
@@ -140,8 +139,7 @@ async fn test_cluster() -> anyhow::Result<()> {
 
     assert_eq!(&vec![btreeset![1]], x.membership_config.membership().get_joint_config());
 
-    let nodes_in_cluster =
-        x.membership_config.nodes().map(|(nid, node)| (*nid, node.clone())).collect::<BTreeMap<_, _>>();
+    let nodes_in_cluster = x.membership_config.nodes().map(|(nid, node)| (*nid, node.clone())).collect::<BTreeMap<_, _>>();
     assert_eq!(
         btreemap! {
             1 => BasicNode::new("127.0.0.1:21001"),
@@ -173,17 +171,12 @@ async fn test_cluster() -> anyhow::Result<()> {
 
     println!("=== metrics after change-member");
     let x = client.metrics().await?;
-    assert_eq!(
-        &vec![btreeset![1, 2, 3]],
-        x.membership_config.membership().get_joint_config()
-    );
+    assert_eq!(&vec![btreeset![1, 2, 3]], x.membership_config.membership().get_joint_config());
 
     // --- Try to write some application data through the leader.
 
     println!("=== write `foo=bar`");
-    let _x = client
-        .write(&&json!({ "foo": "bar" }))
-        .await?;
+    let _x = client.write(&&json!({ "foo": "bar" })).await?;
 
     // --- Wait for a while to let the replication get done.
 
@@ -208,9 +201,7 @@ async fn test_cluster() -> anyhow::Result<()> {
     // --- A write to non-leader will be automatically forwarded to a known leader
 
     println!("=== read `foo` on node 2");
-    let _x = client2
-        .write(&json!({ "foo": "wow" }))
-        .await?;
+    let _x = client2.write(&json!({ "foo": "wow" })).await?;
 
     tokio::time::sleep(Duration::from_millis(1_000)).await;
 
@@ -239,7 +230,7 @@ async fn test_cluster() -> anyhow::Result<()> {
     match x {
         Err(e) => {
             let s = e.to_string();
-            let expect_err:String = "error occur on remote peer 2: has to forward request to: Some(1), Some(BasicNode { addr: \"127.0.0.1:21001\" })".to_string();
+            let expect_err: String = "error occur on remote peer 2: has to forward request to: Some(1), Some(BasicNode { addr: \"127.0.0.1:21001\" })".to_string();
 
             assert_eq!(s, expect_err);
         }
@@ -258,9 +249,7 @@ async fn test_cluster() -> anyhow::Result<()> {
     assert_eq!(&vec![btreeset![3]], x.membership_config.membership().get_joint_config());
 
     println!("=== write `foo=zoo` to node-3");
-    let _x = client3
-        .write(&json!({ "foo": "zoo" }))
-        .await?;
+    let _x = client3.write(&json!({ "foo": "zoo" })).await?;
 
     println!("=== read `foo=zoo` to node-3");
     let got = client3.read(&"foo".to_string()).await?;

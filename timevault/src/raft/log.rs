@@ -1,5 +1,7 @@
+use std::fmt::Debug;
 use std::io::Cursor;
 use std::marker::PhantomData;
+use std::ops::RangeBounds;
 use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
 use std::thread;
 
@@ -11,7 +13,7 @@ use crate::raft::errors::{map_send_err, recv_map, recv_unit};
 use crate::raft::paths;
 use crate::raft::{TvrConfig, TvrNodeId};
 use openraft::storage::{LogFlushed, RaftLogStorage};
-use openraft::{Entry, EntryPayload, ErrorSubject, ErrorVerb, LogId, LogState, RaftLogReader, StorageError, Vote};
+use openraft::{Entry, EntryPayload, ErrorSubject, ErrorVerb, LogId, LogState, OptionalSend, RaftLogReader, StorageError, Vote};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tracing::{trace, warn};
 
@@ -181,10 +183,10 @@ where
     R: openraft::AppDataResponse,
 {
     fn drop(&mut self) {
-        //let _ = self.tx.send(Op::Shutdown);
-        //if let Some(h) = self.thread_handle.take() {
-        //    let _ = h.join();
-        // }
+        let _ = self.tx.send(Op::Shutdown);
+        if let Some(h) = self.thread_handle.take() {
+           let _ = h.join();
+        }
     }
 }
 
@@ -335,7 +337,7 @@ where
     D: serde::Serialize + DeserializeOwned + openraft::AppData,
     R: openraft::AppDataResponse,
 {
-    async fn try_get_log_entries<RB: std::ops::RangeBounds<u64> + Clone + std::fmt::Debug + openraft::OptionalSend>(
+    async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + OptionalSend>(
         &mut self,
         range: RB,
     ) -> Result<Vec<Entry<TvrConfig<D, R>>>, StorageError<TvrNodeId>> {
@@ -362,6 +364,16 @@ where
         self.tx.send(Op::Read(start, end, rtx)).map_err(|e| map_send_err(ErrorSubject::Logs, ErrorVerb::Read, e))?;
         let buf = recv_map(rrx, ErrorSubject::Logs, ErrorVerb::Read)?;
         Ok(decode_entries(&self.part, &buf, start..=end))
+    }
+}
+
+impl<D, R> RaftLogReader<TvrConfig<D, R>> for TvrLogAdapter<D, R>
+where
+    D: DeserializeOwned + openraft::AppData + serde::Serialize,
+    R: openraft::AppDataResponse,
+{
+    async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + OptionalSend>(&mut self, range: RB) -> Result<Vec<Entry<TvrConfig<D, R>>>, StorageError<TvrNodeId>> {
+        self.get_log_reader().await.try_get_log_entries(range).await // FIXME I'm not sure about this line, just added await until it started to work
     }
 }
 
