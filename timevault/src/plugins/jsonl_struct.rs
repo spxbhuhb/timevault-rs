@@ -8,7 +8,7 @@ pub struct JsonlStructPlugin;
 impl FormatPlugin for JsonlStructPlugin {
     fn id(&self) -> &'static str { "jsonl_struct" }
 
-    fn scanner<'a>(&self, file: &'a mut (dyn ReadSeek)) -> io::Result<Box<dyn ChunkScanner + 'a>> {
+    fn scanner<'a>(&self, file: &'a mut dyn ReadSeek) -> io::Result<Box<dyn ChunkScanner + 'a>> {
         Ok(Box::new(JsonlStructScanner::new(file)))
     }
 
@@ -23,12 +23,12 @@ impl FormatPlugin for JsonlStructPlugin {
 }
 
 struct JsonlStructScanner<'a> {
-    reader: BufReader<&'a mut (dyn ReadSeek)>,
+    reader: BufReader<&'a mut dyn ReadSeek>,
     pos: u64,
 }
 
 impl<'a> JsonlStructScanner<'a> {
-    fn new(file: &'a mut (dyn ReadSeek)) -> Self {
+    fn new(file: &'a mut dyn ReadSeek) -> Self {
         let _ = file.seek(SeekFrom::Start(0));
         Self { reader: BufReader::new(file), pos: 0 }
     }

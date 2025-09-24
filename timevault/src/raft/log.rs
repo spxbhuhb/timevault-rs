@@ -13,7 +13,7 @@ use crate::raft::{TvrConfig, TvrNodeId};
 use openraft::storage::{LogFlushed, RaftLogStorage};
 use openraft::{Entry, EntryPayload, ErrorSubject, ErrorVerb, LogId, LogState, RaftLogReader, StorageError, Vote};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tracing::trace;
+use tracing::{trace, warn};
 
 #[derive(Serialize, Deserialize, Clone)]
 struct JsonlRecord {
@@ -57,6 +57,7 @@ where
     R: openraft::AppDataResponse,
 {
     pub fn new(part: PartitionHandle, node_id: TvrNodeId) -> Self {
+        trace!("new {} {}", part.short_id(), node_id);
         let cfg = part.cfg();
         if cfg.format_plugin != "jsonl" {
             panic!("Only jsonl format is supported for now.");
@@ -74,59 +75,69 @@ where
     }
 
     fn bg_loop(part: PartitionHandle, rx: Receiver<Op<D, R>>) {
-        while let Ok(op) = rx.recv() {
-            match op {
-                Op::Append(list, cb) => {
-                    trace!("bg_loop {}: append list.len={}", part.short_id(), list.len());
-                    let mut first_err: Option<TvError> = None;
-                    for (idx, bytes) in list {
-                        if let Err(e) = part.append(idx, &bytes) {
-                            first_err = Some(e);
-                            break;
+        trace!("bg_loop {}: start", part.short_id());
+
+        loop {
+            match rx.recv() {
+                Ok(op) => match op {
+                    Op::Append(list, cb) => {
+                        trace!("bg_loop {}: append list.len={}", part.short_id(), list.len());
+                        let mut first_err: Option<TvError> = None;
+                        for (idx, bytes) in list {
+                            if let Err(e) = part.append(idx, &bytes) {
+                                first_err = Some(e);
+                                break;
+                            }
+                        }
+                        if let Some(e) = first_err {
+                            let _ = cb.log_io_completed(Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                        } else {
+                            let _ = cb.log_io_completed(Ok(()));
                         }
                     }
-                    if let Some(e) = first_err {
-                        let _ = cb.log_io_completed(Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
-                    } else {
-                        let _ = cb.log_io_completed(Ok(()));
+                    Op::Read(a, b, tx) => {
+                        trace!("bg_loop {}: read a={}, b={}", part.short_id(), a, b);
+                        let r = read_range_blocks(&part, a, b);
+                        tx.send(r).expect("bg_loop: failed to send Read response");
                     }
-                }
-                Op::Read(a, b, tx) => {
-                    trace!("bg_loop {}: read a={}, b={}", part.short_id(), a, b);
-                    let r = read_range_blocks(&part, a, b);
-                    tx.send(r).expect("bg_loop: failed to send Read response");
-                }
-                Op::Truncate(idx, tx) => {
-                    trace!("bg_loop {}: truncate idx={}", part.short_id(), idx);
-                    let r = part.truncate(idx);
-                    tx.send(r).expect("bg_loop: failed to send Truncate response");
-                }
-                Op::Purge(id, tx) => {
-                    trace!("bg_loop {}: purge id={:x}", part.short_id(), id.index);
-                    let r = purge_with_persist(&part, &id);
-                    tx.send(r).expect("bg_loop: failed to send Purge response");
-                }
-                Op::GetState(tx) => {
-                    trace!("bg_loop {}: get state", part.short_id());
-                    let r = get_state::<D, R>(&part);
-                    tx.send(r).expect("bg_loop: failed to send GetState response");
-                }
-                Op::SaveVote(v, tx) => {
-                    trace!("bg_loop {}: save vote", part.short_id());
-                    let r = save_vote_file(&part, &v);
-                    tx.send(r).expect("bg_loop: failed to send SaveVote response");
-                }
-                Op::ReadVote(tx) => {
-                    trace!("bg_loop {}: read vote", part.short_id());
-                    let r = read_vote_file(&part);
-                    tx.send(r).expect("bg_loop: failed to send ReadVote response");
-                }
-                Op::Shutdown => {
-                    trace!("bg_loop {}: shutdown", part.short_id());
+                    Op::Truncate(idx, tx) => {
+                        trace!("bg_loop {}: truncate idx={}", part.short_id(), idx);
+                        let r = part.truncate(idx);
+                        tx.send(r).expect("bg_loop: failed to send Truncate response");
+                    }
+                    Op::Purge(id, tx) => {
+                        trace!("bg_loop {}: purge id={:x}", part.short_id(), id.index);
+                        let r = purge_with_persist(&part, &id);
+                        tx.send(r).expect("bg_loop: failed to send Purge response");
+                    }
+                    Op::GetState(tx) => {
+                        trace!("bg_loop {}: get state", part.short_id());
+                        let r = get_state::<D, R>(&part);
+                        tx.send(r).expect("bg_loop: failed to send GetState response");
+                    }
+                    Op::SaveVote(v, tx) => {
+                        trace!("bg_loop {}: save vote", part.short_id());
+                        let r = save_vote_file(&part, &v);
+                        tx.send(r).expect("bg_loop: failed to send SaveVote response");
+                    }
+                    Op::ReadVote(tx) => {
+                        trace!("bg_loop {}: read vote", part.short_id());
+                        let r = read_vote_file(&part);
+                        tx.send(r).expect("bg_loop: failed to send ReadVote response");
+                    }
+                    Op::Shutdown => {
+                        trace!("bg_loop {}: shutdown", part.short_id());
+                        break;
+                    }
+                },
+                Err(e) => {
+                    warn!("bg_loop {}: channel closed unexpectedly: {}", part.short_id(), e);
                     break;
                 }
             }
         }
+
+        trace!("bg_loop {}: exit", part.short_id());
     }
 }
 
@@ -136,10 +147,10 @@ where
     R: openraft::AppDataResponse,
 {
     fn drop(&mut self) {
-        let _ = self.tx.send(Op::Shutdown);
-        if let Some(h) = self.thread_handle.take() {
-            let _ = h.join();
-        }
+        //let _ = self.tx.send(Op::Shutdown);
+        //if let Some(h) = self.thread_handle.take() {
+        //    let _ = h.join();
+        // }
     }
 }
 

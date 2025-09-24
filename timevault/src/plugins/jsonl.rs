@@ -10,7 +10,7 @@ impl FormatPlugin for JsonlPlugin {
         "jsonl"
     }
 
-    fn scanner<'a>(&self, file: &'a mut (dyn ReadSeek)) -> io::Result<Box<dyn ChunkScanner + 'a>> {
+    fn scanner<'a>(&self, file: &'a mut dyn ReadSeek) -> io::Result<Box<dyn ChunkScanner + 'a>> {
         Ok(Box::new(JsonlScanner::new(file)))
     }
 
@@ -24,13 +24,13 @@ impl FormatPlugin for JsonlPlugin {
 }
 
 struct JsonlScanner<'a> {
-    reader: BufReader<&'a mut (dyn ReadSeek)>,
+    reader: BufReader<&'a mut dyn ReadSeek>,
     pos: u64,
     line_buf: Vec<u8>,
 }
 
 impl<'a> JsonlScanner<'a> {
-    fn new(file: &'a mut (dyn ReadSeek)) -> Self {
+    fn new(file: &'a mut dyn ReadSeek) -> Self {
         // Ensure starting at 0
         let _ = file.seek(SeekFrom::Start(0));
         Self {

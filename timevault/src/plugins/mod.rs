@@ -18,10 +18,10 @@ impl<T: Read + Seek + ?Sized> ReadSeek for T {}
 
 pub trait FormatPlugin: Send + Sync + 'static {
     fn id(&self) -> &'static str;
-    fn scanner<'a>(&self, file: &'a mut (dyn ReadSeek)) -> io::Result<Box<dyn ChunkScanner + 'a>>;
+    fn scanner<'a>(&self, file: &'a mut dyn ReadSeek) -> io::Result<Box<dyn ChunkScanner + 'a>>;
     // Encode a record from a serde value into on-disk bytes.
     fn encode(&self, ts_ms: i64, value: &serde_json::Value) -> io::Result<Vec<u8>>;
-    fn valid_prefix_len(&self, _file: &mut (dyn ReadSeek)) -> io::Result<Option<u64>> { Ok(None) }
+    fn valid_prefix_len(&self, _file: &mut dyn ReadSeek) -> io::Result<Option<u64>> { Ok(None) }
     fn dedup_eq(&self, _a: &[u8], _b: &[u8]) -> bool { false }
 }
 

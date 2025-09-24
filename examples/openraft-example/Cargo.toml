@@ -1,7 +1,20 @@
 [package]
-name = "raft"
+name = "openraft-example"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 timevault = { path = "../../timevault" }
+openraft = { version = "0.9.21", features = ["serde","storage-v2"] }
+actix-web = "4.0.0-rc.2"
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1", features = ["rt","rt-multi-thread", "macros", "sync", "time"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+openraft-macros = "0.9.21"
+reqwest = { version = "0.12.23", features = ["json"] }
+anyhow = "1.0.63"
+maplit = "1.0.2"

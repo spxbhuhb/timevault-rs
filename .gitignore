@@ -1,1 +1,3 @@
 /target
+/var/
+/examples/openraft-example/var/
