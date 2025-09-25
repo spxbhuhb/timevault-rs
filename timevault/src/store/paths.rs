@@ -16,8 +16,10 @@ pub fn chunks_dir(part_dir: &Path) -> PathBuf { part_dir.join("chunks") }
 pub fn tmp_dir(part_dir: &Path) -> PathBuf { part_dir.join("tmp") }
 pub fn gc_dir(part_dir: &Path) -> PathBuf { part_dir.join("gc") }
 
-pub fn chunk_file(chunks_dir: &Path, chunk_id: Uuid) -> PathBuf { chunks_dir.join(format!("{}.chunk", chunk_id)) }
-pub fn index_file(chunks_dir: &Path, chunk_id: Uuid) -> PathBuf { chunks_dir.join(format!("{}.index", chunk_id)) }
+fn padded_hex(id: u64) -> String { format!("{:016x}", id) }
+
+pub fn chunk_file(chunks_dir: &Path, chunk_id: u64) -> PathBuf { chunks_dir.join(format!("{}.chunk", padded_hex(chunk_id))) }
+pub fn index_file(chunks_dir: &Path, chunk_id: u64) -> PathBuf { chunks_dir.join(format!("{}.index", padded_hex(chunk_id))) }
 
 pub fn list_partitions(root: &Path) -> crate::errors::Result<Vec<Uuid>> {
     let mut out = Vec::new();

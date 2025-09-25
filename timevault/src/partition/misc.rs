@@ -1,7 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::errors::{Result, TvError};
 use crate::partition::PartitionHandle;
@@ -35,7 +34,7 @@ pub(crate) fn rewrite_manifest(path: &std::path::Path, lines: &[crate::disk::man
     crate::disk::manifest::rewrite_manifest_atomic(path, lines)
 }
 
-pub(crate) fn delete_chunk_files(chunks_dir: &std::path::Path, ids: &[Uuid]) {
+pub(crate) fn delete_chunk_files(chunks_dir: &std::path::Path, ids: &[u64]) {
     for id in ids.iter().copied() {
         let cp = crate::store::paths::chunk_file(chunks_dir, id);
         let ip = crate::store::paths::index_file(chunks_dir, id);

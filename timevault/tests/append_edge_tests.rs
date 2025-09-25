@@ -69,7 +69,7 @@ fn chunk_id_timestamp_matches_first_record() {
     let manifest_path = paths::partition_manifest(&part_dir);
     let lines = read_manifest_lines(&manifest_path);
     let chunk_id = lines.first().unwrap().chunk_id;
-    assert!(chunk_id.get_timestamp().is_some(), "chunk id should be a UUIDv7 with timestamp");
+    assert_eq!(chunk_id, ts_ms, "chunk id should equal the first record's order_key");
 }
 
 #[test]

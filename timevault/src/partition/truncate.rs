@@ -1,6 +1,5 @@
 use std::fs::File;
 
-use uuid::Uuid;
 
 use crate::disk::index::{load_index_lines, IndexLine};
 use crate::disk::manifest::{load_manifest, ManifestLine};
@@ -22,7 +21,7 @@ pub fn truncate(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
 
     // Determine chunks to keep/delete and potential overlapping chunk
     let mut new_manifest: Vec<ManifestLine> = Vec::new();
-    let mut to_delete: Vec<Uuid> = Vec::new();
+    let mut to_delete: Vec<u64> = Vec::new();
 
     // Identify overlapping candidate index in original order (last one before deletion)
     let mut overlap_idx: Option<usize> = None;
@@ -75,7 +74,7 @@ pub fn truncate(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
 
 fn truncate_chunk_and_index(
     chunks_dir: &std::path::Path,
-    chunk_id: Uuid,
+    chunk_id: u64,
     cutoff_key: u64,
     was_closed_max: Option<u64>,
     plugin: &dyn FormatPlugin,

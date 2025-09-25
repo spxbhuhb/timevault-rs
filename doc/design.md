@@ -24,7 +24,7 @@ Maximum record size is configurable (default: 1 MB).
 - Partition: Logical stream of records identified by a UUID (partition id is exactly the UUID you provide).
 - Record: Opaque bytes and an order_key: u64 (required). The library does not interpret the payload.
 - Format plugin: User-supplied logic to parse, validate, compress, uncompress etc. a record.
-- Chunk: Append-only file containing order-key-ordered records for a partition. Identified by UUIDv7.
+- Chunk: Append-only file containing order-key-ordered records for a partition. Identified by the chunk id, see [File Naming](#22-file-naming)
 - Index (per-chunk): Sparse mapping from order_key ranges to byte ranges in its chunk to accelerate seeks.
 - Metadata: Per-partition static info and rolling state (format versions, knobs).
 - Manifest: Per-partition list of live chunks (ordered by order_key), their IDs, min/max order_key, and file paths.
@@ -49,8 +49,8 @@ Maximum record size is configurable (default: 1 MB).
   metadata.json
   manifest.jsonl
   chunks/
-    <chunk-uuidv7>.chunk
-    <chunk-uuidv7>.index
+    <chunk-id>.chunk
+    <chunk-id>.index
   tmp/                      (atomic rename staging)
   gc/                       (quarantine for deletion)
 ```
@@ -58,13 +58,17 @@ Maximum record size is configurable (default: 1 MB).
 ### 2.2 File Naming
 
 - Chunk ID:
-  - UUIDv7 (time-ordered creation time, simplifies ops & debugging)
+  - the `order_key` of the first record that has been written into the chunk
+  - the chunk id never changes, purge keeps it as it is even if the record has been deleted by the purge
 - Filenames:
-  - Chunk: <chunk-uuidv7>.chunk
-  - Index: <chunk-uuidv7>.index
+  - in file names the chunk id is the hexadecimal representation of the order keys padded with zeros (16 characters) 
+  - Chunk: <partition-id>-<padded-hex(chunk_id)>.chunk
+  - Index: <partition-id>-<padded-hex(chunk_id)>.index
 
 Chunk and index files are created as the first record in the chunk is appended, this ensures that the chunk ID 
 is monotonic and known at the time of creation.
+
+NOTE: The rolling mechanism ensures that records with the same order key are always appended to the same chunk.
 
 ## 3. File Formats (v1)
 
@@ -127,7 +131,7 @@ Open chunk manifest entry:
 
 ```json
 { 
-  "chunk_id": "<uuidv7>", 
+  "chunk_id": "<chunk-id>", 
   "min_order_key": 1609459200000
 }
 ```
@@ -136,7 +140,7 @@ Rolled chunk manifest entry:
 
 ```json
 { 
-  "chunk_id": "<uuidv7>", 
+  "chunk_id": "<chunk-id>", 
   "min_order_key": 1609459200000,
   "max_order_key": 1609545600000
 }
@@ -218,7 +222,7 @@ pub struct PartitionRuntime {
   pub cur_partition_root: PathBuf,
   pub cur_partition_id: Uuid,
   // Current chunk state
-  pub cur_chunk_id: Option<Uuid>,
+  pub cur_chunk_id: Option<u64>,
   pub cur_chunk_min_order_key: u64,
   pub cur_chunk_max_order_key: u64,
   pub cur_chunk_size_bytes: u64,
@@ -242,7 +246,7 @@ Route:
 1. Acquire write lock (process level, per partition).
 2. Get cached partition data (`partition.runtime`).
 3. If there is no partition, create a new partition.
-4. If there is no last chunk or roll condition met (size/time), create a new chunk (new UUIDv7).
+4. If there is no last chunk or roll condition met (size/time), create a new chunk (new chunk id).
 5. Append to the chunk file; update in-memory partition cache data
 6. Append index entries to the chunk’s index file if needed
 7. Release write lock.
@@ -259,17 +263,20 @@ to bound data loss window if used standalone.
 
 ### 4.2 Chunk Rolling
 
-Roll when a record arrives that would cause the chunk to exceed the configured size or time AND
-the record order key != `partition.runtime.cur_chunk_max_order_key`. This ensures that records with the
-same order key are always appended to the same chunk.
+Roll-before-append rule:
 
-- `record byte count + partition.runtime.cur_chunk_size_bytes` ≥ `chunk_roll.max_bytes` OR
-- If `key_is_timestamp=true`, `(order_key - partition.runtime.cur_chunk_min_order_key)` ≥ `chunk_roll.max_hours` converted to the same unit as the order key (hours × 3_600_000 when using milliseconds)
+When applying entry `e` with `(order_key = k, size = s)` to the current open chunk `(last_key = k0, bytes = B)`:
+
+- If the chunk is empty and s > MAX_BYTES, allow a single oversized-record chunk.
+- Else, if `k == k0` append to the current chunk without rolling (to keep all k == k0 together).
+- Else, if `B + s >= MAX_BYTES` then roll before appending `e`.
+- Else, if `key_is_timestamp=true` and `(k - cur_chunk_min_order_key)` ≥ `chunk_roll.max_hours` converted
+  to the same unit as the order key (hours × 3_600_000 when using milliseconds), then roll before appending `e`.
 
 Rolling:
 
 - closes the current chunk
-- opens a new chunk (UUIDv7)
+- opens a new chunk
 - updates the manifest
 
 ### 4.3 Retention & Deletion
@@ -518,10 +525,14 @@ impl PartitionHandle {
 
 ## 11. Correctness Invariants
 
-1. Monotonicity within a chunk: records in a chunk are non-decreasing by order key.
-2. Chunk coverage: Manifest’s chunk list is strictly ordered and non-overlapping by order key (and therefore by time when `key_is_timestamp=true`).
-3. Append-only: No in-place mutations to chunk files.
-4. Durable manifests: A manifest rename is the sole source of truth for routing reads.
+1. Monotonic IDs per partition: For any chunk sequence, chunk_id strictly increases
+2. Monotonicity within a chunk: records in a chunk are non-decreasing by order key.
+3. Chunk coverage: Manifest’s chunk list is strictly ordered and non-overlapping by order key (and therefore by time when `key_is_timestamp=true`).
+4. Append-only: No in-place mutations to chunk files.
+5. Durable manifests: A manifest rename is the sole source of truth for routing reads.
+6. Chunk ID immutability: The chunk_id is the boundary key at open. It never changes, even if purge removes earlier records.
+7. Equal-key grouping: All records with the same order_key live in one chunk; a roll can only happen between different keys.
+8. At-most-one chunk per key: Because of (7), there can’t be two chunks starting at the same key.
 
 ## 12. Performance Notes & Limits (Initial Targets)
 

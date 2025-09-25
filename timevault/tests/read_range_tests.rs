@@ -45,14 +45,14 @@ fn write_manifest_line(manifest_path: &PathBuf, line: &ManifestLine) {
     f.write_all(&buf).unwrap();
 }
 
-fn write_chunk(chunks_dir: &PathBuf, chunk_id: Uuid, data: &[u8]) -> PathBuf {
+fn write_chunk(chunks_dir: &PathBuf, chunk_id: u64, data: &[u8]) -> PathBuf {
     let p = paths::chunk_file(chunks_dir, chunk_id);
     let mut f = File::create(&p).unwrap();
     f.write_all(data).unwrap();
     p
 }
 
-fn write_index(chunks_dir: &PathBuf, chunk_id: Uuid, lines: &[IndexLine]) -> PathBuf {
+fn write_index(chunks_dir: &PathBuf, chunk_id: u64, lines: &[IndexLine]) -> PathBuf {
     let p = paths::index_file(chunks_dir, chunk_id);
     let mut f = File::create(&p).unwrap();
     for l in lines {
@@ -100,7 +100,7 @@ fn test_missing_chunk_returns_error() {
 
     let manifest = paths::partition_manifest(&part_dir);
     // manifest references a chunk id but no file created
-    let chunk_id = Uuid::now_v7();
+    let chunk_id: u64 = 100;
     let m = ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(200) };
     write_manifest_line(&manifest, &m);
 
@@ -117,7 +117,7 @@ fn test_missing_index_returns_error_for_partial_read() {
     let (h, part_dir, chunks_dir) = setup_partition(&root);
 
     let manifest = paths::partition_manifest(&part_dir);
-    let chunk_id = Uuid::now_v7();
+    let chunk_id: u64 = 100;
     // Rolled chunk [100, 300]
     write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(300) });
 
@@ -138,7 +138,7 @@ fn test_whole_chunk_fast_path_reads_entire_file() {
     let (h, part_dir, chunks_dir) = setup_partition(&root);
 
     let manifest = paths::partition_manifest(&part_dir);
-    let chunk_id = Uuid::now_v7();
+    let chunk_id: u64 = 100;
     // Rolled chunk fully inside range [100, 300]
     write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(300) });
 
@@ -158,7 +158,7 @@ fn test_indexed_selection_reads_expected_ranges() {
     let (h, part_dir, chunks_dir) = setup_partition(&root);
 
     let manifest = paths::partition_manifest(&part_dir);
-    let chunk_id = Uuid::now_v7();
+    let chunk_id: u64 = 100;
     write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(500) });
 
     // Build a chunk with 3 blocks: A(0..3), B(3..6), C(6..9)
@@ -197,7 +197,7 @@ fn test_range_outside_returns_empty() {
     let (h, part_dir, chunks_dir) = setup_partition(&root);
 
     let manifest = paths::partition_manifest(&part_dir);
-    let chunk_id = Uuid::now_v7();
+    let chunk_id: u64 = 100;
     write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(200) });
     write_chunk(&chunks_dir, chunk_id, b"XYZ");
 
@@ -214,8 +214,8 @@ fn test_cross_chunk_reads_concatenate() {
     let (h, part_dir, chunks_dir) = setup_partition(&root);
 
     let manifest = paths::partition_manifest(&part_dir);
-    let c1 = Uuid::now_v7();
-    let c2 = Uuid::now_v7();
+    let c1: u64 = 0;
+    let c2: u64 = 50;
     write_manifest_line(&manifest, &ManifestLine { chunk_id: c1, min_order_key: 0, max_order_key: Some(49) });
     write_manifest_line(&manifest, &ManifestLine { chunk_id: c2, min_order_key: 50, max_order_key: Some(99) });
     write_chunk(&chunks_dir, c1, b"AAAA");

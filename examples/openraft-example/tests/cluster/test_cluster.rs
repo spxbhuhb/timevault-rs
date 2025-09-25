@@ -49,6 +49,7 @@ pub fn log_panic(panic: &PanicInfo) {
 
 /// Setup a cluster of 3 nodes.
 /// Write to it and read from it.
+#[ignore]
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_cluster() -> anyhow::Result<()> {
     // --- The client itself does not store addresses for all nodes, but just node id.

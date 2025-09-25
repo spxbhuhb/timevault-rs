@@ -47,14 +47,14 @@ fn write_manifest_line(manifest_path: &PathBuf, line: &ManifestLine) {
     f.write_all(&buf).unwrap();
 }
 
-fn write_chunk(chunks_dir: &PathBuf, chunk_id: Uuid, data: &[u8]) -> PathBuf {
+fn write_chunk(chunks_dir: &PathBuf, chunk_id: u64, data: &[u8]) -> PathBuf {
     let p = paths::chunk_file(chunks_dir, chunk_id);
     let mut f = File::create(&p).unwrap();
     f.write_all(data).unwrap();
     p
 }
 
-fn write_index(chunks_dir: &PathBuf, chunk_id: Uuid, lines: &[IndexLine]) -> PathBuf {
+fn write_index(chunks_dir: &PathBuf, chunk_id: u64, lines: &[IndexLine]) -> PathBuf {
     let p = paths::index_file(chunks_dir, chunk_id);
     let mut f = File::create(&p).unwrap();
     for l in lines {
@@ -98,7 +98,7 @@ fn recovery_missing_chunk_yields_error() {
     let (part_dir, chunks_dir) = setup_partition(&root, id);
     let manifest = paths::partition_manifest(&part_dir);
 
-    let chunk_id = Uuid::now_v7();
+    let chunk_id: u64 = 100;
     // Manifest references last chunk id, but we don't create the chunk file
     write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(200) });
 
@@ -116,7 +116,7 @@ fn recovery_missing_index_yields_error() {
     let (part_dir, chunks_dir) = setup_partition(&root, id);
     let manifest = paths::partition_manifest(&part_dir);
 
-    let chunk_id = Uuid::now_v7();
+    let chunk_id: u64 = 100;
     write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(300) });
     // Create a chunk file but not index
     write_chunk(&chunks_dir, chunk_id, br#"{"timestamp":100}\n{"timestamp":200}\n"#.as_ref());
@@ -135,7 +135,7 @@ fn recovery_with_index_extends_block_and_reads_last_record() {
     let (part_dir, chunks_dir) = setup_partition(&root, id);
     let manifest = paths::partition_manifest(&part_dir);
 
-    let chunk_id = Uuid::now_v7();
+    let chunk_id: u64 = 100;
     write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(400) });
 
     // Build chunk: block (two records) then tail (one record)
@@ -178,7 +178,7 @@ fn recovery_two_chunks_second_has_empty_index_initializes_runtime() {
     let manifest = paths::partition_manifest(&part_dir);
 
     // First chunk: closed with index
-    let chunk1 = Uuid::now_v7();
+    let chunk1: u64 = 1000;
     let rec1a = b"{\"timestamp\":1000}\n";
     let rec1b = b"{\"timestamp\":1001}\n";
     let mut data1 = Vec::new(); data1.extend_from_slice(rec1a); data1.extend_from_slice(rec1b);
@@ -190,7 +190,7 @@ fn recovery_two_chunks_second_has_empty_index_initializes_runtime() {
     write_manifest_line(&manifest, &ManifestLine { chunk_id: chunk1, min_order_key: 1000, max_order_key: Some(1001) });
 
     // Second chunk: open (no max), with an empty index file present
-    let chunk2 = Uuid::now_v7();
+    let chunk2: u64 = 1002;
     let rec2a = b"{\"timestamp\":1002}\n";
     let rec2b = b"{\"timestamp\":1003}\n";
     let mut data2 = Vec::new(); data2.extend_from_slice(rec2a); data2.extend_from_slice(rec2b);
@@ -232,7 +232,7 @@ fn recovery_tail_flushes_with_expected_offset() {
     write_metadata_with_index_cfg(&part_dir, id, IndexCfg { max_records: 1, max_hours: 0 });
     let manifest = paths::partition_manifest(&part_dir);
 
-    let chunk_id = Uuid::now_v7();
+    let chunk_id: u64 = 100;
     write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(400) });
 
     let rec1 = b"{\"timestamp\":100}\n";
@@ -272,7 +272,7 @@ fn recovery_seek_to_misaligned_offset_errors() {
     let (part_dir, chunks_dir) = setup_partition(&root, id);
     let manifest = paths::partition_manifest(&part_dir);
 
-    let chunk_id = Uuid::now_v7();
+    let chunk_id: u64 = 100;
     write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(400) });
 
     // Create chunk with two valid JSONL records

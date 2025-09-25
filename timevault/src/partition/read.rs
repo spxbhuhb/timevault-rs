@@ -5,7 +5,6 @@ use crate::partition::PartitionHandle;
 use crate::store::paths;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use uuid::Uuid;
 
 /// Reads blocks that cover a range of data from a partition
 ///
@@ -67,7 +66,7 @@ fn append_entire_file(path: &std::path::Path, out: &mut Vec<u8>) -> Result<()> {
     Ok(())
 }
 
-fn append_indexed_ranges(chunks_dir: &std::path::Path, chunk_id: Uuid, from_key: u64, to_key: u64, out: &mut Vec<u8>) -> Result<()> {
+fn append_indexed_ranges(chunks_dir: &std::path::Path, chunk_id: u64, from_key: u64, to_key: u64, out: &mut Vec<u8>) -> Result<()> {
     let chunk_path = paths::chunk_file(chunks_dir, chunk_id);
     let index_path = paths::index_file(chunks_dir, chunk_id);
     let mut f = File::open(&chunk_path).map_err(|_| TvError::MissingFile { path: chunk_path.clone() })?;

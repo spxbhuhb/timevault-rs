@@ -1,7 +1,6 @@
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 
-use uuid::Uuid;
 
 use crate::disk::index::{IndexLine, load_index_lines};
 use crate::disk::manifest::{ManifestLine, load_manifest};
@@ -45,7 +44,7 @@ pub fn purge_partition_dir(part_dir: &std::path::Path, cutoff_key: u64, plugin: 
 
     // Build new manifest and deletion list
     let mut new_manifest: Vec<ManifestLine> = Vec::new();
-    let mut to_delete: Vec<Uuid> = Vec::new();
+    let mut to_delete: Vec<u64> = Vec::new();
 
     // We'll track the first overlapping chunk (the first chunk that has any data > cutoff)
     let mut overlap_idx: Option<usize> = None;
@@ -99,7 +98,7 @@ pub fn purge_partition_dir(part_dir: &std::path::Path, cutoff_key: u64, plugin: 
 
 // Purge records from the start of chunk up to and including cutoff_key.
 // Returns: (kept_any, new_min_key, was_closed_max)
-fn purge_chunk_from_start(chunks_dir: &std::path::Path, chunk_id: Uuid, cutoff_key: u64, was_closed_max: Option<u64>, plugin: &dyn FormatPlugin) -> Result<(bool, Option<u64>, Option<u64>)> {
+fn purge_chunk_from_start(chunks_dir: &std::path::Path, chunk_id: u64, cutoff_key: u64, was_closed_max: Option<u64>, plugin: &dyn FormatPlugin) -> Result<(bool, Option<u64>, Option<u64>)> {
     let chunk_path = paths::chunk_file(chunks_dir, chunk_id);
     if !chunk_path.exists() {
         return Err(TvError::MissingFile { path: chunk_path });

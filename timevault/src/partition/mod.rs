@@ -35,7 +35,7 @@ pub struct PartitionRuntime {
     pub cur_partition_root: PathBuf,
     pub cur_partition_id: Uuid,
     // Current chunk state
-    pub cur_chunk_id: Option<Uuid>,
+    pub cur_chunk_id: Option<u64>,
     pub cur_chunk_min_order_key: u64,
     pub cur_chunk_max_order_key: u64,
     pub cur_chunk_size_bytes: u64,

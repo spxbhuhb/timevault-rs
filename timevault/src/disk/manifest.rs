@@ -1,10 +1,9 @@
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use std::io::Write;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ManifestLine {
-    pub chunk_id: Uuid,
+    pub chunk_id: u64,
     pub min_order_key: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_order_key: Option<u64>,
