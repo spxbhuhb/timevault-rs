@@ -15,7 +15,7 @@ Main use cases:
 
 1. Many small (one record) writes into different partitions (e.g., IoT measurements).
 2. Bulk uploads (after a network outage).
-3. Range queries between two timestamps.
+3. Range queries between two order keys (for example, two timestamps).
 
 Maximum record size is configurable (default: 1 MB).
 
@@ -73,8 +73,8 @@ is monotonic and known at the time of creation.
 Chunk files are simple list of records. The library does not interpret the payload and uses the format plugin to 
 parse, validate, compress, uncompress etc. records.
 
-Record format is opaque. It is the responsibility of the caller to serialize/deserialize, determine length, 
-timestamp, validate, compress, etc.
+Record format is opaque. It is the responsibility of the caller to serialize/deserialize, determine length,
+order key, validate, compress, etc.
 
 The manifest provides information about the chunk files, the library uses information from the manifest to route reads.
 
@@ -158,7 +158,7 @@ use std::path::Path;
 pub struct RecordMeta {
     pub offset: u64,       // start of record in the chunk file
     pub len: u32,          // exact byte length of the record
-    pub ts_ms: i64,        // event timestamp extracted by the plugin
+    pub order_key: u64,    // order key extracted by the plugin
 }
 
 /// Read-only view into a chunk during maintenance operations.
@@ -186,7 +186,7 @@ pub trait FormatPlugin: Send + Sync + 'static {
 
     /// Create a forward scanner over a chunk file. The store opens the file and passes a Read+Seek.
     /// Implementations must:
-    ///  - Extract record boundaries and timestamps without panicking.
+    ///  - Extract record boundaries and order keys without panicking.
     ///  - Treat trailing partial bytes as corruption of the last record and stop before them.
     fn scanner<'a>(
         &self,
@@ -200,7 +200,7 @@ pub trait FormatPlugin: Send + Sync + 'static {
         file: &mut (dyn Read + Seek)
     ) -> io::Result<Option<u64>> { Ok(None) }
 
-    /// Optional dedup comparator for last-record optimization on equal timestamps.
+    /// Optional dedup comparator for last-record optimization on equal order keys.
     /// Given two record byte slices (new append vs last record), return whether they are identical semantically.
     /// Default: false (no dedup).
     fn dedup_eq(&self, _a: &[u8], _b: &[u8]) -> bool { false }
@@ -235,7 +235,7 @@ pub struct PartitionRuntime {
 
 ### 4.1 Append (Normal / In-Order)
 
-Input: (partition_id, timestamp_ms, payload_bytes)
+Input: (partition_id, order_key, payload_bytes)
 
 Route:
 
@@ -250,9 +250,9 @@ Route:
 Durability: WAL is guaranteed by OpenRaft; at the store layer call fsync at policy checkpoints (configurable)
 to bound data loss window if used standalone.
 
-- When `timestamp_ms < partition.runtime.last_chunk_max_ts_ms` the library should reject the operation with an error. 
+- When `order_key < partition.runtime.cur_chunk_max_order_key` the library should reject the operation with an error.
 - No grace period is provided, appends must be in order.
-- When `timestamp_ms == partition.runtime.last_chunk_max_ts_ms`:
+- When `order_key == partition.runtime.cur_chunk_max_order_key`:
   - if the record is the same (raw bytes) as the last record in the chunk (from the cache)
     - ignore the record and return with success status
   - otherwise, append the record to the chunk as per normal appending
@@ -260,11 +260,11 @@ to bound data loss window if used standalone.
 ### 4.2 Chunk Rolling
 
 Roll when a record arrives that would cause the chunk to exceed the configured size or time AND
-the record timestamp != `partition.runtime.last_chunk_max_ts_ms`. This ensures that records with the
-same timestamp are always appended to the same chunk.
+the record order key != `partition.runtime.cur_chunk_max_order_key`. This ensures that records with the
+same order key are always appended to the same chunk.
 
-- `record byte count + cached.partition.last_chunk_size_bytes` ≥ `chunk_roll.max_bytes` OR
-- `record timestamp - cached.partition.last_chunk_min_ts_ms` ≥ `chunk_roll.max_hours`
+- `record byte count + partition.runtime.cur_chunk_size_bytes` ≥ `chunk_roll.max_bytes` OR
+- If `key_is_timestamp=true`, `(order_key - partition.runtime.cur_chunk_min_order_key)` ≥ `chunk_roll.max_hours` converted to the same unit as the order key (hours × 3_600_000 when using milliseconds)
 
 Rolling:
 
@@ -274,7 +274,7 @@ Rolling:
 
 ### 4.3 Retention & Deletion
 
-- Time-based: drop rolled chunks where `max_ts_ms` < `(now - retention.max_days)`.
+- Time-based (only if `key_is_timestamp=true`): drop rolled chunks where `max_order_key` < `(now - retention.max_days)` converted to the same unit as the order key.
 - Deletions are at chunk granularity.
 - Deletion steps: move to /gc, then unlink asynchronously.
 
@@ -318,13 +318,13 @@ Semantics (physical):
 - Operation is inclusive at the boundary: records with `order_key == cutoff_key` are removed.
 
 Algorithm (per manifest order, physical):
-1. Identify chunks to delete entirely: any rolled chunk where `chunk_max_key ≤ cutoff_key`.
+1. Identify chunks to delete entirely: any rolled chunk where `max_order_key ≤ cutoff_key`.
    - Delete its `.chunk` and `.index` files.
    - Fsync the chunks directory after deletions to persist unlinks.
-2. At most one overlapping chunk may remain (the first chunk with `min ≤ cutoff_key < max`, or open with `min ≤ cutoff_key`). Handle it by case:
+2. At most one overlapping chunk may remain (the first chunk with `min_order_key ≤ cutoff_key < max_order_key`, or open with `min_order_key ≤ cutoff_key`). Handle it by case:
    - Closed chunk (has `max_order_key`):
      - Compute `scan_start` = end of the last index block with `block_max_key ≤ cutoff_key`.
-     - Scan forward with the FormatPlugin to find the first record with `ts_ms > cutoff_key` → `copy_start` and its key → `new_min_key`.
+     - Scan forward with the FormatPlugin to find the first record with `order_key > cutoff_key` → `copy_start` and its key → `new_min_key`.
      - Rewrite the chunk by copying the tail `[copy_start, EOF)` into place (atomic temp + rename).
      - Rewrite the index:
        - Drop all blocks with `block_min_key ≤ cutoff_key`.
@@ -359,10 +359,10 @@ Semantics:
 - Operation is inclusive at the boundary: records with `order_key == cutoff_key` are removed.
 
 Algorithm (per manifest order):
-1. Identify chunks to delete entirely: any chunk where `chunk_min_key ≥ cutoff_key`.
+1. Identify chunks to delete entirely: any chunk where `min_order_key ≥ cutoff_key`.
    - Delete its `.chunk` and `.index` files.
    - Fsync the chunks directory after deletions to persist unlinks.
-2. At most one overlapping chunk may remain (the last chunk with `min < cutoff_key`). Handle it by case:
+2. At most one overlapping chunk may remain (the last chunk with `min_order_key < cutoff_key`). Handle it by case:
    - Closed chunk (has `max_order_key`):
      - Keep only index blocks with `block_max_key < cutoff_key`.
      - Truncate the chunk file to the end offset of the last kept block.
@@ -370,7 +370,7 @@ Algorithm (per manifest order):
      - Update the manifest entry’s `max_order_key` to the last kept key. If no blocks remain, delete the chunk entirely.
    - Open chunk (no `max_order_key`):
      - Load its index and compute `base_end_off` = end of the last indexed block strictly before cutoff.
-     - Scan from `base_end_off` with the partition’s FormatPlugin until the first record with `ts_ms ≥ cutoff_key`.
+     - Scan from `base_end_off` with the partition’s FormatPlugin until the first record with `order_key ≥ cutoff_key`.
      - Truncate the chunk at the end of the last kept record.
      - If any unindexed tail was kept, append a synthetic index block describing `[base_end_off, new_len)` with accurate min/max keys.
      - Leave the manifest entry open (no `max_order_key`).
@@ -391,41 +391,41 @@ Edge cases:
 
 **Ranges are closed.**
 
-* Rolled chunk covers **[chunk_min_ms, chunk_max_ms]** (from the manifest).
-* Open chunk covers **[chunk_min_ms, +∞)** (no max yet).
+* Rolled chunk covers **[chunk_min_key, chunk_max_key]** (from the manifest).
+* Open chunk covers **[chunk_min_key, +∞)** (no max yet).
 
 **Index blocks.**
 Each index line describes a block:
-`{ block_min_ms, block_max_ms, file_offset_bytes, block_len_bytes }` (sorted by time).
+`{ block_min_key, block_max_key, file_offset_bytes, block_len_bytes }` (sorted by order key).
 
-**read_range(partition, t_from, t_to)**
+**read_range(partition, from_key, to_key)**
 
 1. **Choose chunks**
 
-  * **Rolled:** include if `chunk_min_ms ≤ t_to` **and** `chunk_max_ms ≥ t_from`.
-  * **Open:** include if `chunk_min_ms ≤ t_to`.
+  * **Rolled:** include if `chunk_min_key ≤ to_key` **and** `chunk_max_key ≥ from_key`.
+  * **Open:** include if `chunk_min_key ≤ to_key`.
 
 2. **Whole-chunk fast path (rolled only)**
 
-  * If `chunk_min_ms ≥ t_from` **and** `chunk_max_ms ≤ t_to`, return the entire file as one range:
+  * If `chunk_min_key ≥ from_key` **and** `chunk_max_key ≤ to_key`, return the entire file as one range:
     `(offset = 0, len = file_size_bytes)`.
     Skip the index for this chunk.
 
 3. **Block selection (otherwise)**
 
   * Load the chunk’s index.
-  * Find the **first** block with `block_max_ms ≥ t_from`.
-  * Return that block and every following block **until** a block has `block_min_ms > t_to`.
+  * Find the **first** block with `block_max_key ≥ from_key`.
+  * Return that block and every following block **until** a block has `block_min_key > to_key`.
   * For each returned block, emit the byte range `(file_offset_bytes, block_len_bytes)` as-is. The client filters individual records.
 
 4. **Boundary rules**
 
-  * Records with timestamp equal to `t_from` or `t_to` are included (closed interval).
-  * Adjacent chunks must not share a boundary timestamp; rolling ensures `next.chunk_min_ms > prev.chunk_max_ms`.
+  * Records with order keys equal to `from_key` or `to_key` are included (closed interval). When `key_is_timestamp=true`, this corresponds to including boundary timestamps.
+  * Adjacent chunks must not share a boundary order key; rolling ensures `next.chunk_min_key > prev.chunk_max_key`.
 
 5. **Closeness**
 
-  * Only the **first** and **last** returned blocks can include bytes outside `[t_from, t_to]`.
+  * Only the **first** and **last** returned blocks can include bytes outside `[from_key, to_key]`.
   * All blocks in between lie fully inside the requested range.
 
 ## 6. Concurrency, Atomicity & Recovery
@@ -508,8 +508,8 @@ impl Store {
 struct PartitionHandle { /** ... */ }
 
 impl PartitionHandle {
-    fn append(&self, ts_ms: i64, payload: &[u8]) -> Result<AppendAck> {}
-    fn read_range(&self, from_ms: i64, to_ms: i64) -> Result<Vec<u8>> {}
+    fn append(&self, order_key: u64, payload: &[u8]) -> Result<AppendAck> {}
+    fn read_range(&self, from_key: u64, to_key: u64) -> Result<Vec<u8>> {}
     fn force_roll(&self) -> Result<()> {}
     fn stats(&self) -> PartitionStats {}
     fn set_config(&self, delta: PartitionConfigDelta) -> Result<()> {}
@@ -518,8 +518,8 @@ impl PartitionHandle {
 
 ## 11. Correctness Invariants
 
-1. Monotonicity within a chunk: records in a chunk are non-decreasing by timestamp.
-2. Chunk coverage: Manifest’s chunk list is strictly ordered and non-overlapping in time.
+1. Monotonicity within a chunk: records in a chunk are non-decreasing by order key.
+2. Chunk coverage: Manifest’s chunk list is strictly ordered and non-overlapping by order key (and therefore by time when `key_is_timestamp=true`).
 3. Append-only: No in-place mutations to chunk files.
 4. Durable manifests: A manifest rename is the sole source of truth for routing reads.
 
