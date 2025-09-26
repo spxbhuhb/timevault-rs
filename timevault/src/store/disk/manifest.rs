@@ -30,7 +30,7 @@ pub fn append_manifest_line(path: &std::path::Path, line: ManifestLine) -> crate
     let mut buf = serde_json::to_vec(&line)?; buf.push(b'\n'); f.write_all(&buf)?; Ok(())
 }
 
-pub fn close_manifest_line(path: &std::path::Path, rt: &crate::partition::PartitionRuntime) -> crate::errors::Result<()> {
+pub fn close_manifest_line(path: &std::path::Path, rt: &crate::store::partition::PartitionRuntime) -> crate::errors::Result<()> {
     use std::io::Write;
     // Read existing manifest lines
     let content = std::fs::read_to_string(path).unwrap_or_default();

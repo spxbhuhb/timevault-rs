@@ -1,4 +1,4 @@
-use crate::plugins::{ChunkScanner, FormatPlugin, ReadSeek, RecordMeta};
+use crate::store::plugins::{ChunkScanner, FormatPlugin, ReadSeek, RecordMeta};
 use serde::Deserialize;
 use std::io::{self, BufRead, BufReader, SeekFrom};
 

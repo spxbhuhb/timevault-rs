@@ -1,21 +1,21 @@
 use std::fs::File;
 use std::io::{Read, Seek};
 
-use crate::disk::index::{IndexLine, load_index_lines};
-use crate::plugins::FormatPlugin;
-use crate::partition::PartitionRuntime;
+use crate::store::disk::index::{IndexLine, load_index_lines};
+use crate::store::plugins::FormatPlugin;
+use crate::store::partition::PartitionRuntime;
 use crate::store::paths;
 use uuid::Uuid;
 
 // Initialize runtime by using provided metadata for plugin selection, then manifest/index/chunk per design.md.
-pub fn load_partition_runtime_data(root: &std::path::Path, id: Uuid, meta: &crate::disk::metadata::MetadataJson) -> crate::errors::Result<PartitionRuntime> {
-    let plugin = crate::plugins::resolve_plugin(&meta.format_plugin)?;
+pub fn load_partition_runtime_data(root: &std::path::Path, id: Uuid, meta: &crate::store::disk::metadata::MetadataJson) -> crate::errors::Result<PartitionRuntime> {
+    let plugin = crate::store::plugins::resolve_plugin(&meta.format_plugin)?;
     // Handle pending physical purge if any (idempotent). Logical purge is a no-op here.
     if !meta.logical_purge {
         if let Some(cutoff) = meta.last_purge_id {
             let part_dir = paths::partition_dir(root, id);
             // Best-effort: run purge; ignore errors due to missing files to avoid blocking recovery
-            let _ = crate::partition::purge::purge_partition_dir(&part_dir, cutoff, &*plugin);
+            let _ = crate::store::partition::purge::purge_partition_dir(&part_dir, cutoff, &*plugin);
         }
     }
     load_partition_runtime_data_inner(root, id, &*plugin)
@@ -26,7 +26,7 @@ fn load_partition_runtime_data_inner(root: &std::path::Path, id: Uuid, plugin: &
     let manifest_path = paths::partition_manifest(&part_dir);
     let mut cache = PartitionRuntime::default();
     if !manifest_path.exists() { return Ok(cache); }
-    let lines = crate::disk::manifest::load_manifest(&manifest_path)?;
+    let lines = crate::store::disk::manifest::load_manifest(&manifest_path)?;
     let Some(last) = lines.last().cloned() else { return Ok(cache); };
 
     cache.cur_chunk_id = Some(last.chunk_id);

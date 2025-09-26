@@ -3,7 +3,7 @@ use std::io::Cursor;
 use std::marker::PhantomData;
 
 use crate::PartitionHandle;
-use crate::disk::atomic::atomic_write_json;
+use crate::store::disk::atomic::atomic_write_json;
 use crate::raft::errors::se_new;
 use crate::raft::{StorageResult, TvrConfig, TvrNode, TvrNodeId, paths};
 use openraft::ErrorSubject;

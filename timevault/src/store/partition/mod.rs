@@ -7,7 +7,7 @@ pub mod truncate;
 pub mod purge;
 pub mod misc;
 
-use crate::admin::stats::PartitionStats;
+use crate::store::admin::stats::PartitionStats;
 use crate::errors::Result;
 use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
@@ -63,7 +63,7 @@ impl PartitionHandle {
         std::fs::create_dir_all(crate::store::paths::tmp_dir(&part_dir))?;
         std::fs::create_dir_all(crate::store::paths::gc_dir(&part_dir))?;
         // Write metadata.json
-        let meta = crate::disk::metadata::MetadataJson {
+        let meta = crate::store::disk::metadata::MetadataJson {
             partition_id: id,
             format_version: cfg.format_version,
             format_plugin: cfg.format_plugin.clone(),
@@ -75,7 +75,7 @@ impl PartitionHandle {
             last_purge_id: None,
         };
         let meta_path = crate::store::paths::partition_metadata(&part_dir);
-        crate::disk::atomic::atomic_write_json(&meta_path, &meta)?;
+        crate::store::disk::atomic::atomic_write_json(&meta_path, &meta)?;
         // Create empty manifest.json
         let manifest_path = crate::store::paths::partition_manifest(&part_dir);
         if !manifest_path.exists() { std::fs::File::create(&manifest_path)?; }
@@ -103,8 +103,8 @@ impl PartitionHandle {
         // Resolve plugin and config from metadata when present
         let part_dir = crate::store::paths::partition_dir(&root, id);
         let meta_path = crate::store::paths::partition_metadata(&part_dir);
-        let (m, cfg): (crate::disk::metadata::MetadataJson, PartitionConfig) = if meta_path.exists() {
-            let m = crate::disk::metadata::load_metadata(&meta_path)?;
+        let (m, cfg): (crate::store::disk::metadata::MetadataJson, PartitionConfig) = if meta_path.exists() {
+            let m = crate::store::disk::metadata::load_metadata(&meta_path)?;
             // Optionally validate id match; ignore mismatch to keep minimal
             let cfg = PartitionConfig { format_version: m.format_version, format_plugin: m.format_plugin.clone(), chunk_roll: m.chunk_roll.clone(), index: m.index.clone(), retention: m.retention.clone(), key_is_timestamp: m.key_is_timestamp, logical_purge: m.logical_purge };
             (m, cfg)

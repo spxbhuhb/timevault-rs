@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::errors::{Result, TvError};
-use crate::partition::PartitionHandle;
+use crate::store::partition::PartitionHandle;
 
 pub(crate) fn ensure_writable(h: &PartitionHandle) -> Result<()> {
     if h.inner.read_only { return Err(TvError::ReadOnly); }
@@ -24,14 +24,14 @@ pub(crate) fn paths_for(h: &PartitionHandle) -> Result<Paths> {
     Ok(Paths { part_dir, chunks_dir, manifest_path })
 }
 
-pub(crate) fn load_meta_and_plugin(part_dir: &std::path::Path) -> Result<(crate::disk::metadata::MetadataJson, Arc<dyn crate::plugins::FormatPlugin>)> {
-    let meta = crate::disk::metadata::load_metadata(&crate::store::paths::partition_metadata(part_dir))?;
-    let plugin = crate::plugins::resolve_plugin(&meta.format_plugin)?;
+pub(crate) fn load_meta_and_plugin(part_dir: &std::path::Path) -> Result<(crate::store::disk::metadata::MetadataJson, Arc<dyn crate::store::plugins::FormatPlugin>)> {
+    let meta = crate::store::disk::metadata::load_metadata(&crate::store::paths::partition_metadata(part_dir))?;
+    let plugin = crate::store::plugins::resolve_plugin(&meta.format_plugin)?;
     Ok((meta, plugin))
 }
 
-pub(crate) fn rewrite_manifest(path: &std::path::Path, lines: &[crate::disk::manifest::ManifestLine]) -> Result<()> {
-    crate::disk::manifest::rewrite_manifest_atomic(path, lines)
+pub(crate) fn rewrite_manifest(path: &std::path::Path, lines: &[crate::store::disk::manifest::ManifestLine]) -> Result<()> {
+    crate::store::disk::manifest::rewrite_manifest_atomic(path, lines)
 }
 
 pub(crate) fn delete_chunk_files(chunks_dir: &std::path::Path, ids: &[u64]) {
@@ -44,11 +44,11 @@ pub(crate) fn delete_chunk_files(chunks_dir: &std::path::Path, ids: &[u64]) {
     let _ = crate::store::fsync::fsync_dir(chunks_dir);
 }
 
-pub(crate) fn refresh_runtime(h: &PartitionHandle, meta: &crate::disk::metadata::MetadataJson) -> Result<()> {
+pub(crate) fn refresh_runtime(h: &PartitionHandle, meta: &crate::store::disk::metadata::MetadataJson) -> Result<()> {
     // It might be better performance-wise to update the in-memory runtime directly, but this is simpler.
     // Purge can do a lot of things, it would be hard to keep track properly, better to just re-load the whole thing.
     // Maybe we can optimize this later.
-    let rt = crate::partition::recovery::load_partition_runtime_data(h.root(), h.id(), meta)?;
+    let rt = crate::store::partition::recovery::load_partition_runtime_data(h.root(), h.id(), meta)?;
     *h.inner.runtime.write() = {
         let mut r = rt.clone();
         r.cur_partition_root = h.inner.root.clone();

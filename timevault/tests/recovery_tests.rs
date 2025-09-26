@@ -5,11 +5,11 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 use uuid::Uuid;
 
-use timevault::partition::IndexCfg;
-use timevault::partition::recovery::load_partition_runtime_data;
+use timevault::store::partition::IndexCfg;
+use timevault::store::partition::recovery::load_partition_runtime_data;
 use timevault::store::paths;
-use timevault::disk::manifest::ManifestLine;
-use timevault::disk::index::IndexLine;
+use timevault::store::disk::manifest::ManifestLine;
+use timevault::store::disk::index::IndexLine;
 use timevault::PartitionHandle;
 
 fn setup_partition(root: &PathBuf, id: Uuid) -> (PathBuf, PathBuf) {
@@ -23,7 +23,7 @@ fn setup_partition(root: &PathBuf, id: Uuid) -> (PathBuf, PathBuf) {
 fn write_metadata(part_dir: &PathBuf, id: Uuid) { write_metadata_with_index_cfg(part_dir, id, Default::default()); }
 
 fn write_metadata_with_index_cfg(part_dir: &PathBuf, id: Uuid, index_cfg: IndexCfg) {
-    use timevault::disk::metadata::MetadataJson;
+    use timevault::store::disk::metadata::MetadataJson;
     let m = MetadataJson {
         partition_id: id,
         format_version: 1,
@@ -84,7 +84,7 @@ fn recovery_no_manifest_returns_default() {
     fs::create_dir_all(paths::chunks_dir(&part_dir)).unwrap();
     write_metadata(&part_dir, id);
     let meta_path = paths::partition_metadata(&part_dir);
-    let m = timevault::disk::metadata::load_metadata(&meta_path).unwrap();
+    let m = timevault::store::disk::metadata::load_metadata(&meta_path).unwrap();
     let cache = load_partition_runtime_data(&root, id, &m).unwrap();
     assert!(cache.cur_chunk_id.is_none());
     assert_eq!(cache.cur_chunk_size_bytes, 0);
@@ -103,7 +103,7 @@ fn recovery_missing_chunk_yields_error() {
     write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(200) });
 
     let meta_path = paths::partition_metadata(&part_dir);
-    let m = timevault::disk::metadata::load_metadata(&meta_path).unwrap();
+    let m = timevault::store::disk::metadata::load_metadata(&meta_path).unwrap();
     let err = load_partition_runtime_data(&root, id, &m).unwrap_err();
     match err { timevault::errors::TvError::MissingFile { path } => assert_eq!(path, paths::chunk_file(&chunks_dir, chunk_id)), other => panic!("unexpected error: {other:?}") }
 }
@@ -122,7 +122,7 @@ fn recovery_missing_index_yields_error() {
     write_chunk(&chunks_dir, chunk_id, br#"{"timestamp":100}\n{"timestamp":200}\n"#.as_ref());
 
     let meta_path = paths::partition_metadata(&part_dir);
-    let m = timevault::disk::metadata::load_metadata(&meta_path).unwrap();
+    let m = timevault::store::disk::metadata::load_metadata(&meta_path).unwrap();
     let err = load_partition_runtime_data(&root, id, &m).unwrap_err();
     match err { timevault::errors::TvError::MissingFile { path } => assert_eq!(path, paths::index_file(&chunks_dir, chunk_id)), other => panic!("unexpected error: {other:?}") }
 }
@@ -155,7 +155,7 @@ fn recovery_with_index_extends_block_and_reads_last_record() {
     write_index(&chunks_dir, chunk_id, &idx);
 
     let meta_path = paths::partition_metadata(&part_dir);
-    let m = timevault::disk::metadata::load_metadata(&meta_path).unwrap();
+    let m = timevault::store::disk::metadata::load_metadata(&meta_path).unwrap();
     let cache = load_partition_runtime_data(&root, id, &m).unwrap();
     // last_index_block_min/max should be extended to 350, and size increased by tail len
     assert_eq!(cache.cur_index_block_min_order_key, 100);
@@ -204,7 +204,7 @@ fn recovery_two_chunks_second_has_empty_index_initializes_runtime() {
     write_manifest_line(&manifest, &ManifestLine { chunk_id: chunk2, min_order_key: 1002, max_order_key: None });
 
     let meta_path = paths::partition_metadata(&part_dir);
-    let m = timevault::disk::metadata::load_metadata(&meta_path).unwrap();
+    let m = timevault::store::disk::metadata::load_metadata(&meta_path).unwrap();
     let rt = load_partition_runtime_data(&root, id, &m).unwrap();
     // Runtime should point to the current (second) chunk
     assert_eq!(rt.cur_chunk_id, Some(chunk2));
@@ -246,7 +246,7 @@ fn recovery_tail_flushes_with_expected_offset() {
     write_index(&chunks_dir, chunk_id, &idx);
 
     let meta_path = paths::partition_metadata(&part_dir);
-    let m = timevault::disk::metadata::load_metadata(&meta_path).unwrap();
+    let m = timevault::store::disk::metadata::load_metadata(&meta_path).unwrap();
     let cache = load_partition_runtime_data(&root, id, &m).unwrap();
     assert_eq!(cache.cur_index_block_start_off, block_len);
     assert_eq!(cache.cur_index_block_len_bytes, tail.len() as u64);
@@ -257,7 +257,7 @@ fn recovery_tail_flushes_with_expected_offset() {
 
     let idx_path = paths::index_file(&chunks_dir, chunk_id);
     let f = File::open(&idx_path).unwrap();
-    let lines = timevault::disk::index::load_index_lines(&f).unwrap();
+    let lines = timevault::store::disk::index::load_index_lines(&f).unwrap();
     assert_eq!(lines.len(), 2);
     let last = lines.last().unwrap();
     assert_eq!(last.file_offset_bytes, block_len);
@@ -288,7 +288,7 @@ fn recovery_seek_to_misaligned_offset_errors() {
     write_index(&chunks_dir, chunk_id, &idx);
 
     let meta_path = paths::partition_metadata(&part_dir);
-    let m = timevault::disk::metadata::load_metadata(&meta_path).unwrap();
+    let m = timevault::store::disk::metadata::load_metadata(&meta_path).unwrap();
     let err = load_partition_runtime_data(&root, id, &m).unwrap_err();
     // Expect an Io error originating from seek_to invalid input
     match err {

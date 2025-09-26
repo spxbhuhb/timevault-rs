@@ -2,12 +2,12 @@ use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 
-use crate::disk::index::{IndexLine, load_index_lines};
-use crate::disk::manifest::{ManifestLine, load_manifest};
+use crate::store::disk::index::{IndexLine, load_index_lines};
+use crate::store::disk::manifest::{ManifestLine, load_manifest};
 use crate::errors::{Result, TvError};
-use crate::partition::PartitionHandle;
-use crate::partition::misc;
-use crate::plugins::FormatPlugin;
+use crate::store::partition::PartitionHandle;
+use crate::store::partition::misc;
+use crate::store::plugins::FormatPlugin;
 use crate::store::paths;
 
 pub fn purge(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
@@ -18,7 +18,7 @@ pub fn purge(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
     let (mut meta, plugin) = misc::load_meta_and_plugin(&p.part_dir)?;
     meta.last_purge_id = Some(cutoff_key);
     let meta_path = paths::partition_metadata(&p.part_dir);
-    crate::disk::atomic::atomic_write_json(&meta_path, &meta)?;
+    crate::store::disk::atomic::atomic_write_json(&meta_path, &meta)?;
 
     // If configured as logical purge, return immediately after persisting last_purge_id
     if meta.logical_purge {
@@ -90,8 +90,8 @@ pub fn purge_partition_dir(part_dir: &std::path::Path, cutoff_key: u64, plugin: 
     }
 
     // Rewrite manifest and delete files
-    crate::partition::misc::rewrite_manifest(&manifest_path, &new_manifest)?;
-    crate::partition::misc::delete_chunk_files(&chunks_dir, &to_delete);
+    crate::store::partition::misc::rewrite_manifest(&manifest_path, &new_manifest)?;
+    crate::store::partition::misc::delete_chunk_files(&chunks_dir, &to_delete);
 
     Ok(())
 }
@@ -142,7 +142,7 @@ fn purge_chunk_from_start(chunks_dir: &std::path::Path, chunk_id: u64, cutoff_ke
         None => {
             // Truncate index to empty and return kept_any=false
             if index_path.exists() {
-                crate::disk::index::rewrite_index_atomic(&index_path, &[])?;
+                crate::store::disk::index::rewrite_index_atomic(&index_path, &[])?;
             }
             // Truncate file to 0
             let cf = OpenOptions::new().write(true).open(&chunk_path)?;
@@ -213,7 +213,7 @@ fn purge_chunk_from_start(chunks_dir: &std::path::Path, chunk_id: u64, cutoff_ke
     //   synthesize an index entry for that portion. It will be indexed later by cadence or roll.
 
     // Rewrite index file atomically
-    crate::disk::index::rewrite_index_atomic(&index_path, &new_index)?;
+    crate::store::disk::index::rewrite_index_atomic(&index_path, &new_index)?;
 
     Ok((true, first_kept_key, was_closed_max))
 }

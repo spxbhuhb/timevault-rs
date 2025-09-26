@@ -1,12 +1,12 @@
 use std::fs::File;
 
 
-use crate::disk::index::{load_index_lines, IndexLine};
-use crate::disk::manifest::{load_manifest, ManifestLine};
+use crate::store::disk::index::{load_index_lines, IndexLine};
+use crate::store::disk::manifest::{load_manifest, ManifestLine};
 use crate::errors::{Result, TvError};
-use crate::partition::misc;
-use crate::partition::PartitionHandle;
-use crate::plugins::FormatPlugin;
+use crate::store::partition::misc;
+use crate::store::partition::PartitionHandle;
+use crate::store::plugins::FormatPlugin;
 use crate::store::paths;
 
 pub fn truncate(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
@@ -177,7 +177,7 @@ fn truncate_chunk_and_index(
     if new_len == 0 {
         // Truncate files to zero for safety; caller may remove them
         let _ = misc::truncate_file(&chunk_path, 0);
-        let _ = crate::disk::index::rewrite_index_atomic(&index_path, &[]);
+        let _ = crate::store::disk::index::rewrite_index_atomic(&index_path, &[]);
         return Ok((false, None));
     }
 
@@ -187,7 +187,7 @@ fn truncate_chunk_and_index(
     // Rewrite index file to only kept blocks (no partial adjustment). For open chunk, kept blocks already end <= new_len.
     // For closed chunk, we ensured end is exactly last kept block end.
     if index_path.exists() {
-        crate::disk::index::rewrite_index_atomic(&index_path, &kept_index)?;
+        crate::store::disk::index::rewrite_index_atomic(&index_path, &kept_index)?;
     }
 
     Ok((true, new_max_key))

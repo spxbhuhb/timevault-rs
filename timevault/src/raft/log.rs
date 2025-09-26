@@ -6,9 +6,9 @@ use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
 use std::thread;
 
 use crate::PartitionHandle;
-use crate::disk::atomic::atomic_write_json;
+use crate::store::disk::atomic::atomic_write_json;
 use crate::errors::TvError;
-use crate::partition::read::read_range_blocks;
+use crate::store::partition::read::read_range_blocks;
 use crate::raft::errors::{map_send_err, recv_map, recv_unit};
 use crate::raft::paths;
 use crate::raft::{TvrConfig, TvrNodeId};
@@ -232,7 +232,7 @@ where
     D: serde::Serialize + DeserializeOwned + openraft::AppData,
     R: openraft::AppDataResponse,
 {
-    let plugin = match crate::plugins::resolve_plugin("jsonl") {
+    let plugin = match crate::store::plugins::resolve_plugin("jsonl") {
         Ok(p) => p,
         Err(_) => return Vec::new(),
     };

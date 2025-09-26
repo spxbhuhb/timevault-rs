@@ -1,9 +1,13 @@
 pub mod paths;
 pub mod locks;
 pub mod fsync;
+pub mod disk;
+pub mod partition;
+pub mod plugins;
+pub mod admin;
 
 use crate::errors::Result;
-use crate::partition::PartitionHandle;
+use partition::PartitionHandle;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

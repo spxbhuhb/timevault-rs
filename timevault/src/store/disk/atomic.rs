@@ -10,7 +10,7 @@ pub fn atomic_write_json<P: AsRef<Path>, T: serde::Serialize>(path: P, val: &T) 
     write_json(&tmp, val)?;
     fsync_file(&tmp)?;
     std::fs::rename(&tmp, path)?;
-    fsync_dir(path.parent().unwrap_or(Path::new(".")))?;
+    fsync_dir(path.parent().unwrap_or(Path::new("../../../..")))?;
     Ok(())
 }
 

@@ -3,8 +3,8 @@ use uuid::Uuid;
 use test_utils::test_dir;
 use timevault::store::paths;
 use timevault::PartitionHandle;
-use timevault::disk::manifest::ManifestLine;
-use timevault::partition::{ChunkRollCfg, IndexCfg, RetentionCfg};
+use timevault::store::disk::manifest::ManifestLine;
+use timevault::store::partition::{ChunkRollCfg, IndexCfg, RetentionCfg};
 
 // This test intentionally keeps its outputs on disk under target/test so they can be
 // manually inspected after `cargo test`. Other tests continue to use TempDir.
@@ -51,7 +51,7 @@ fn append_persistent_outputs_under_target_test() {
 }
 
 fn write_metadata_with_roll(part_dir: &std::path::Path, id: Uuid, max_bytes: u64, max_hours: u64) {
-    use timevault::disk::metadata::MetadataJson;
+    use timevault::store::disk::metadata::MetadataJson;
     fs::create_dir_all(part_dir).unwrap();
     let m = MetadataJson {
         partition_id: id,

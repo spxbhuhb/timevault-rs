@@ -7,8 +7,8 @@ use uuid::Uuid;
 use timevault::store::paths;
 use timevault::{PartitionHandle};
 use timevault::errors::TvError;
-use timevault::disk::manifest::ManifestLine;
-use timevault::disk::index::IndexLine;
+use timevault::store::disk::manifest::ManifestLine;
+use timevault::store::disk::index::IndexLine;
 
 fn setup_partition(root: &PathBuf) -> (PartitionHandle, PathBuf, PathBuf) {
     let pid = Uuid::now_v7();
@@ -21,7 +21,7 @@ fn setup_partition(root: &PathBuf) -> (PartitionHandle, PathBuf, PathBuf) {
 }
 
 fn write_metadata(part_dir: &PathBuf, id: Uuid) {
-    use timevault::disk::metadata::MetadataJson;
+    use timevault::store::disk::metadata::MetadataJson;
     let m = MetadataJson {
         partition_id: id,
         format_version: 1,

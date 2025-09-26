@@ -1,7 +1,7 @@
-use crate::disk::index::{IndexLine, load_index_lines};
-use crate::disk::manifest::{ManifestLine, load_manifest};
+use crate::store::disk::index::{IndexLine, load_index_lines};
+use crate::store::disk::manifest::{ManifestLine, load_manifest};
 use crate::errors::{Result, TvError};
-use crate::partition::PartitionHandle;
+use crate::store::partition::PartitionHandle;
 use crate::store::paths;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};

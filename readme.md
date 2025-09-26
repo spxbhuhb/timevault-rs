@@ -20,7 +20,11 @@ Provides an out-of-the-box `RaftLogStorage` implementation for [OpenRaft](https:
 - There are no API level docs and examples yet, I'll write that sooner or later.
 - There is no published crate, I'll create one only if someone asks for it.
 
-There is a [design document](./doc/design.md) and in the `docs` directory.
+There are some documents in the `docs` directory:
+
+- [Design](./doc/design.md)
+- [Timevault partitions as OpenRaft log storage](./doc/openraft_log_storage.md)
+- [Timevault store in OpenRaft state](./doc/openraft_state.md)
 
 ## Rationale
 
@@ -40,3 +44,5 @@ meets all of these requirements.
 - `examples` - examples of using the library
 - `test-utils` - utilities for testing
 - `timevault` - the library itself
+  - `src/raft` - OpenRaft integration
+  - `src/store` - timevault store (stores multiple partitions)

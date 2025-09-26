@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use crate::partition::{ChunkRollCfg, IndexCfg, RetentionCfg};
+use crate::store::partition::{ChunkRollCfg, IndexCfg, RetentionCfg};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MetadataJson {

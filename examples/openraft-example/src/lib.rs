@@ -14,7 +14,7 @@ use actix_web::web::Data;
 use actix_web::HttpServer;
 use openraft::Config;
 use serde::{Deserialize, Serialize};
-use timevault::partition::PartitionConfig;
+use timevault::store::partition::PartitionConfig;
 use timevault::raft::log::TvrLogAdapter;
 use timevault::raft::state::TvrPartitionStateMachine;
 use timevault::raft::{TvrConfig, TvrNodeId};

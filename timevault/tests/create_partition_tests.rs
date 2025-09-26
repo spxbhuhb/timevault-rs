@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use timevault::store::paths;
 use timevault::{PartitionHandle};
-use timevault::partition::PartitionConfig;
+use timevault::store::partition::PartitionConfig;
 
 #[test]
 fn create_initializes_structure_and_metadata() {

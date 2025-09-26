@@ -5,8 +5,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use timevault::store::StoreConfig;
-use timevault::partition::{PartitionConfig, PartitionHandle};
-use timevault::plugins::FormatPlugin;
+use timevault::store::partition::{PartitionConfig, PartitionHandle};
+use timevault::store::plugins::FormatPlugin;
 use timevault::store::Store;
 
 #[test]
@@ -52,7 +52,7 @@ fn stress_parallel_append_and_read() {
         // Append threads
         for (idx, h) in handles.iter().cloned().enumerate() {
             s.spawn(move || {
-                let plugin = timevault::plugins::jsonl_struct::JsonlStructPlugin::default();
+                let plugin = timevault::store::plugins::jsonl_struct::JsonlStructPlugin::default();
                 for i in 0..RECORDS_PER_PART {
                     let ts = (idx as i64) * 1_000_000 + i as i64;
                     let payload = serde_json::json!({"a": i, "b": idx});

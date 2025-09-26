@@ -26,7 +26,7 @@ pub fn load_index_lines(file: &File) -> Result<Vec<IndexLine>> {
 
 // Create an empty index file for the current partition and given chunk.
 // Uses partition runtime to locate the chunks directory.
-pub fn create_empty_index_file(rt: &crate::partition::PartitionRuntime, chunk_id: u64) -> Result<()> {
+pub fn create_empty_index_file(rt: &crate::store::partition::PartitionRuntime, chunk_id: u64) -> Result<()> {
     let part_dir = crate::store::paths::partition_dir(&rt.cur_partition_root, rt.cur_partition_id);
     let chunks_dir = crate::store::paths::chunks_dir(&part_dir);
     let ip = crate::store::paths::index_file(&chunks_dir, chunk_id);

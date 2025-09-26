@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use timevault::store::paths;
 use timevault::PartitionHandle;
-use timevault::disk::manifest::ManifestLine;
-use timevault::partition::{ChunkRollCfg, IndexCfg, RetentionCfg};
+use timevault::store::disk::manifest::ManifestLine;
+use timevault::store::partition::{ChunkRollCfg, IndexCfg, RetentionCfg};
 
 fn enc(ts: i64, value: serde_json::Value) -> Vec<u8> {
     let rec = serde_json::json!({"timestamp": ts, "payload": value});
@@ -15,7 +15,7 @@ fn enc(ts: i64, value: serde_json::Value) -> Vec<u8> {
 }
 
 fn write_metadata(part_dir: &std::path::Path, id: Uuid, roll_max_bytes: u64, index_max_records: u32) {
-    use timevault::disk::metadata::MetadataJson;
+    use timevault::store::disk::metadata::MetadataJson;
     let m = MetadataJson {
         partition_id: id,
         format_version: 1,
