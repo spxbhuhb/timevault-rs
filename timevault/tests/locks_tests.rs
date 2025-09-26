@@ -8,7 +8,7 @@ use tempfile::TempDir;
 use timevault::errors::TvError;
 use timevault::store::locks::acquire_store_lock;
 use timevault::store::Store;
-use timevault::config::StoreConfig;
+use timevault::store::StoreConfig;
 
 fn lock_file_path(root: &PathBuf) -> PathBuf { root.join(".timevault.write.lock") }
 

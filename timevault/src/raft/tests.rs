@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use crate::PartitionHandle;
-use crate::config::PartitionConfig;
+use crate::partition::PartitionConfig;
 use crate::raft::errors::recv_unit;
 use crate::raft::log::*;
 use crate::raft::{TvrNodeId, paths, TvrConfig, state};

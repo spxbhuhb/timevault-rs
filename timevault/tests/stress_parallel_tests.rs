@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use timevault::config::{PartitionConfig, StoreConfig};
-use timevault::partition::PartitionHandle;
+use timevault::store::StoreConfig;
+use timevault::partition::{PartitionConfig, PartitionHandle};
 use timevault::plugins::FormatPlugin;
 use timevault::store::Store;
 

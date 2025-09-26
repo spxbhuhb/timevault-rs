@@ -2,13 +2,13 @@ pub mod paths;
 pub mod locks;
 pub mod fsync;
 
-use crate::config::StoreConfig;
 use crate::errors::Result;
 use crate::partition::PartitionHandle;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
+use serde::{Deserialize, Serialize};
 
 pub struct Store {
     root: PathBuf,
@@ -34,4 +34,13 @@ impl Store {
     }
 
     pub fn list_partitions(&self) -> Result<Vec<Uuid>> { paths::list_partitions(&self.root) }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoreConfig {
+    pub read_only: bool,
+}
+
+impl Default for StoreConfig {
+    fn default() -> Self { Self { read_only: false } }
 }

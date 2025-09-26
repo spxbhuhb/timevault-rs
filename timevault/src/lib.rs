@@ -1,6 +1,5 @@
 pub mod errors;
 pub mod types;
-pub mod config;
 pub mod plugins;
 pub mod store;
 pub mod partition;

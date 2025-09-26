@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 use uuid::Uuid;
 
-use timevault::config::IndexCfg;
+use timevault::partition::IndexCfg;
 use timevault::partition::recovery::load_partition_runtime_data;
 use timevault::store::paths;
 use timevault::disk::manifest::ManifestLine;

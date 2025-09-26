@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use timevault::PartitionHandle;
 use timevault::disk::manifest::ManifestLine;
+use timevault::partition::{ChunkRollCfg, IndexCfg, RetentionCfg};
 use timevault::store::paths;
 
 fn enc(ts: i64, value: serde_json::Value) -> Vec<u8> {
@@ -14,7 +15,6 @@ fn enc(ts: i64, value: serde_json::Value) -> Vec<u8> {
 }
 
 fn write_metadata(part_dir: &std::path::Path, id: Uuid, roll_max_bytes: u64, index_max_records: u32) {
-    use timevault::config::{ChunkRollCfg, IndexCfg, RetentionCfg};
     use timevault::disk::metadata::MetadataJson;
     let m = MetadataJson {
         partition_id: id,

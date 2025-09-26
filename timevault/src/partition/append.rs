@@ -88,7 +88,7 @@ fn extend_block(rt: &mut crate::partition::PartitionRuntime, order_key: u64, len
     rt.cur_index_block_record_count += 1;
 }
 
-fn should_flush_block(rt: &crate::partition::PartitionRuntime, cfg: &crate::config::PartitionConfig, order_key: u64) -> bool {
+fn should_flush_block(rt: &crate::partition::PartitionRuntime, cfg: &crate::partition::PartitionConfig, order_key: u64) -> bool {
     if rt.cur_index_block_record_count == 0 { return false; }
     let by_recs = cfg.index.max_records > 0 && (rt.cur_index_block_record_count as u32) >= cfg.index.max_records;
     let by_time = if cfg.key_is_timestamp {
@@ -124,7 +124,7 @@ fn update_stats(h: &PartitionHandle, bytes: u64) {
     s.appends += 1; s.bytes += bytes; s.current_chunk_size += bytes;
 }
 
-fn should_roll(rt: &crate::partition::PartitionRuntime, cfg: &crate::config::PartitionConfig, order_key: u64, next_len: u64) -> bool {
+fn should_roll(rt: &crate::partition::PartitionRuntime, cfg: &crate::partition::PartitionConfig, order_key: u64, next_len: u64) -> bool {
     if rt.cur_chunk_id.is_none() { return false; }
     // Rule precedence:
     // 1) If chunk empty and next_len > MAX_BYTES, allow single oversized-record chunk: no roll.

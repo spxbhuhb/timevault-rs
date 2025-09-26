@@ -1,14 +1,15 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use crate::partition::{ChunkRollCfg, IndexCfg, RetentionCfg};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MetadataJson {
     pub partition_id: Uuid,
     pub format_version: u32,
     pub format_plugin: String,
-    pub chunk_roll: super::super::config::ChunkRollCfg,
-    pub index: super::super::config::IndexCfg,
-    pub retention: super::super::config::RetentionCfg,
+    pub chunk_roll: ChunkRollCfg,
+    pub index: IndexCfg,
+    pub retention: RetentionCfg,
     pub key_is_timestamp: bool,
     pub logical_purge: bool,
     pub last_purge_id: Option<u64>
