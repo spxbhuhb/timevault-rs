@@ -1,6 +1,6 @@
 use clap::Parser;
-use tracing_subscriber::EnvFilter;
 use openraft_example::start_example_raft_node;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Clone, Debug)]
 #[clap(author, version, about, long_about = None)]

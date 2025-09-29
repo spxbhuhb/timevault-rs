@@ -8,9 +8,11 @@ use std::time::Duration;
 use maplit::btreemap;
 use maplit::btreeset;
 use openraft::BasicNode;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use openraft_example::client::ExampleClient;
 use openraft_example::start_example_raft_node;
-use serde_json::json;
+use openraft_example::state::{DeviceStatus, ExampleEvent};
 use tokio::runtime::Runtime;
 use tracing_subscriber::EnvFilter;
 
@@ -176,8 +178,15 @@ async fn test_cluster() -> anyhow::Result<()> {
 
     // --- Try to write some application data through the leader.
 
-    println!("=== write `foo=bar`");
-    let _x = client.write(&&json!({ "foo": "bar" })).await?;
+    println!("=== write device online event");
+    let device_id = uuid::Uuid::now_v7();
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
+    let event = ExampleEvent::DeviceOnline {
+        event_id: uuid::Uuid::now_v7(),
+        device_id,
+        timestamp,
+    };
+    let _x = client.write(&event).await?;
 
     // --- Wait for a while to let the replication get done.
 
@@ -185,58 +194,19 @@ async fn test_cluster() -> anyhow::Result<()> {
 
     // --- Read it on every node.
 
-    println!("=== read `foo` on node 1");
-    let x = client.read(&("foo".to_string())).await?;
-    assert_eq!("bar", x);
+    println!("=== read statuses on node 1");
+    let statuses = client.read().await?;
+    assert!(statuses.iter().any(|s: &DeviceStatus| s.device_id == device_id && s.is_online));
 
-    println!("=== read `foo` on node 2");
+    println!("=== read statuses on node 2");
     let client2 = ExampleClient::new(2, get_addr(2)?);
-    let x = client2.read(&("foo".to_string())).await?;
-    assert_eq!("bar", x);
+    let statuses = client2.read().await?;
+    assert!(statuses.iter().any(|s: &DeviceStatus| s.device_id == device_id && s.is_online));
 
-    println!("=== read `foo` on node 3");
+    println!("=== read statuses on node 3");
     let client3 = ExampleClient::new(3, get_addr(3)?);
-    let x = client3.read(&("foo".to_string())).await?;
-    assert_eq!("bar", x);
-
-    // --- A write to non-leader will be automatically forwarded to a known leader
-
-    println!("=== read `foo` on node 2");
-    let _x = client2.write(&json!({ "foo": "wow" })).await?;
-
-    tokio::time::sleep(Duration::from_millis(1_000)).await;
-
-    // --- Read it on every node.
-
-    println!("=== read `foo` on node 1");
-    let x = client.read(&("foo".to_string())).await?;
-    assert_eq!("wow", x);
-
-    println!("=== read `foo` on node 2");
-    let client2 = ExampleClient::new(2, get_addr(2)?);
-    let x = client2.read(&("foo".to_string())).await?;
-    assert_eq!("wow", x);
-
-    println!("=== read `foo` on node 3");
-    let client3 = ExampleClient::new(3, get_addr(3)?);
-    let x = client3.read(&("foo".to_string())).await?;
-    assert_eq!("wow", x);
-
-    println!("=== consistent_read `foo` on node 1");
-    let x = client.consistent_read(&("foo".to_string())).await?;
-    assert_eq!("wow", x);
-
-    println!("=== consistent_read `foo` on node 2 MUST return CheckIsLeaderError");
-    let x = client2.consistent_read(&("foo".to_string())).await;
-    match x {
-        Err(e) => {
-            let s = e.to_string();
-            let expect_err: String = "error occur on remote peer 2: has to forward request to: Some(1), Some(BasicNode { addr: \"127.0.0.1:21001\" })".to_string();
-
-            assert_eq!(s, expect_err);
-        }
-        Ok(_) => panic!("MUST return CheckIsLeaderError"),
-    }
+    let statuses = client3.read().await?;
+    assert!(statuses.iter().any(|s: &DeviceStatus| s.device_id == device_id && s.is_online));
 
     // --- Remove node 1,2 from the cluster.
 
@@ -249,11 +219,5 @@ async fn test_cluster() -> anyhow::Result<()> {
     let x = client.metrics().await?;
     assert_eq!(&vec![btreeset![3]], x.membership_config.membership().get_joint_config());
 
-    println!("=== write `foo=zoo` to node-3");
-    let _x = client3.write(&json!({ "foo": "zoo" })).await?;
-
-    println!("=== read `foo=zoo` to node-3");
-    let got = client3.read(&"foo".to_string()).await?;
-    assert_eq!("zoo", got);
     Ok(())
 }

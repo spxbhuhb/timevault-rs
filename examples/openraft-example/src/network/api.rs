@@ -1,27 +1,101 @@
-use actix_web::web;
-use actix_web::web::Data;
-use actix_web::Responder;
-use actix_web::{get, post};
-use serde_json::json;
-use web::Json;
+use actix_web::web::{Data, Json, Path, Query};
+use actix_web::{Responder, get, post};
+use serde::Deserialize;
+use serde::Serialize;
+use timevault::store::transfer::{DataTransfer, FileDownload, ManifestDownload, TransferRange};
+use uuid::Uuid;
 
 use crate::app::App;
-use crate::ValueRequest;
+use crate::state::{DeviceStatus, ExampleEvent};
 
 #[post("/write")]
-pub async fn write(app: Data<App>, req: Json<ValueRequest>) -> actix_web::Result<impl Responder> {
+pub async fn write(app: Data<App>, req: Json<ExampleEvent>) -> actix_web::Result<impl Responder> {
     let response = app.raft.client_write(req.0).await;
     Ok(Json(response))
 }
 
 #[get("/read")]
-pub async fn read(_app: Data<App>) -> actix_web::Result<impl Responder> {
-//    let state_machine = app.state_machine_store.state_machine.read().await;
-//    let key = req.0;
-//    let value = state_machine.data.get(&key).cloned();
+pub async fn read(app: Data<App>) -> actix_web::Result<impl Responder> {
+    let devices: Vec<DeviceStatus> = app.snapshot_devices();
+    Ok(Json(devices))
+}
 
-//    let res: Result<String, Infallible> = Ok(value.unwrap_or_default());
-    Ok(Json(json!({ "message": "Hello World!" })))
+#[derive(Serialize)]
+struct ManifestResponse {
+    partition_id: Uuid,
+    version: Option<String>,
+    lines: Vec<timevault::store::disk::manifest::ManifestLine>,
+}
+
+#[derive(Serialize)]
+struct RangeResponse {
+    start: u64,
+    end: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct FileResponse {
+    partition_id: Uuid,
+    chunk_id: u64,
+    requested_range: RangeResponse,
+    bytes: Vec<u8>,
+    remote_len: u64,
+    version: Option<String>,
+}
+
+impl From<FileDownload> for FileResponse {
+    fn from(download: FileDownload) -> Self {
+        Self {
+            partition_id: download.partition_id,
+            chunk_id: download.chunk_id,
+            requested_range: RangeResponse {
+                start: download.requested_range.start,
+                end: download.requested_range.end,
+            },
+            bytes: download.bytes,
+            remote_len: download.remote_len,
+            version: download.version,
+        }
+    }
+}
+
+impl From<ManifestDownload> for ManifestResponse {
+    fn from(download: ManifestDownload) -> Self {
+        Self {
+            partition_id: download.partition_id,
+            version: download.version,
+            lines: download.lines,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct RangeQuery {
+    start: u64,
+    end: Option<u64>,
+}
+
+#[get("/transfer/{partition}/manifest")]
+pub async fn transfer_manifest(app: Data<App>, path: Path<(Uuid,)>) -> actix_web::Result<impl Responder> {
+    let (partition,) = path.into_inner();
+    let manifest = app.download_manifest(partition).map_err(actix_web::error::ErrorInternalServerError)?;
+    Ok(Json(ManifestResponse::from(manifest)))
+}
+
+#[get("/transfer/{partition}/chunk/{chunk_id}")]
+pub async fn transfer_chunk(app: Data<App>, path: Path<(Uuid, u64)>, query: Query<RangeQuery>) -> actix_web::Result<impl Responder> {
+    let (partition, chunk_id) = path.into_inner();
+    let range = TransferRange { start: query.start, end: query.end };
+    let download = app.download_chunk(partition, chunk_id, range).map_err(actix_web::error::ErrorInternalServerError)?;
+    Ok(Json(FileResponse::from(download)))
+}
+
+#[get("/transfer/{partition}/index/{chunk_id}")]
+pub async fn transfer_index(app: Data<App>, path: Path<(Uuid, u64)>, query: Query<RangeQuery>) -> actix_web::Result<impl Responder> {
+    let (partition, chunk_id) = path.into_inner();
+    let range = TransferRange { start: query.start, end: query.end };
+    let download = app.download_index(partition, chunk_id, range).map_err(actix_web::error::ErrorInternalServerError)?;
+    Ok(Json(FileResponse::from(download)))
 }
 //
 // #[post("/consistent_read")]
