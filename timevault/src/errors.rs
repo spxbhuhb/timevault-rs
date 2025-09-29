@@ -23,4 +23,6 @@ pub enum TvError {
     MissingFile { path: PathBuf },
     #[error("partition is read-only")]
     ReadOnly,
+    #[error("invalid snapshot: {reason}")]
+    InvalidSnapshot { reason: String },
 }
