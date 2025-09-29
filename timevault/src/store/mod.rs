@@ -5,6 +5,8 @@ pub mod disk;
 pub mod partition;
 pub mod plugins;
 pub mod admin;
+pub mod snapshot;
+pub mod transfer;
 
 use crate::errors::Result;
 use partition::PartitionHandle;
@@ -13,6 +15,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 use serde::{Deserialize, Serialize};
+use crate::store::disk::metadata::MetadataJson;
+use crate::store::partition::PartitionConfig;
 
 pub struct Store {
     root: PathBuf,
@@ -38,6 +42,24 @@ impl Store {
     }
 
     pub fn list_partitions(&self) -> Result<Vec<Uuid>> { paths::list_partitions(&self.root) }
+
+    pub fn root_path(&self) -> &Path { &self.root }
+
+    pub fn ensure_partition(&self, metadata: &MetadataJson) -> Result<PartitionHandle> {
+        match self.open_partition(metadata.partition_id) {
+            Ok(handle) => Ok(handle),
+            Err(err) => match err {
+                crate::errors::TvError::MissingFile { .. } | crate::errors::TvError::PartitionNotFound(_) => {
+                    if self.cfg.read_only { return Err(crate::errors::TvError::ReadOnly); }
+                    let cfg = partition_config_from_metadata(metadata);
+                    let handle = PartitionHandle::create(self.root.clone(), metadata.partition_id, cfg)?;
+                    self.partitions.write().insert(metadata.partition_id, handle.clone());
+                    Ok(handle)
+                }
+                other => Err(other),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,4 +69,16 @@ pub struct StoreConfig {
 
 impl Default for StoreConfig {
     fn default() -> Self { Self { read_only: false } }
+}
+
+fn partition_config_from_metadata(meta: &MetadataJson) -> PartitionConfig {
+    PartitionConfig {
+        format_version: meta.format_version,
+        format_plugin: meta.format_plugin.clone(),
+        chunk_roll: meta.chunk_roll.clone(),
+        index: meta.index.clone(),
+        retention: meta.retention.clone(),
+        key_is_timestamp: meta.key_is_timestamp,
+        logical_purge: meta.logical_purge,
+    }
 }

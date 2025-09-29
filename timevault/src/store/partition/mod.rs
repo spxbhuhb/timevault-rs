@@ -147,6 +147,14 @@ impl PartitionHandle {
 
     #[cfg(test)]
     pub fn cfg_mut_for_tests(&self) -> parking_lot::RwLockWriteGuard<'_, PartitionConfig> { self.inner.cfg.write() }
+
+    pub(crate) fn update_runtime<F>(&self, f: F)
+    where
+        F: FnOnce(&mut PartitionRuntime),
+    {
+        let mut rt = self.inner.runtime.write();
+        f(&mut rt);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
