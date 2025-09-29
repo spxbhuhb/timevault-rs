@@ -51,7 +51,7 @@ pub fn log_panic(panic: &PanicInfo) {
 
 /// Setup a cluster of 3 nodes.
 /// Write to it and read from it.
-#[ignore]
+//#[ignore]
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_cluster() -> anyhow::Result<()> {
     // --- The client itself does not store addresses for all nodes, but just node id.
@@ -63,8 +63,8 @@ async fn test_cluster() -> anyhow::Result<()> {
         log_panic(panic);
     }));
 
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    // .add_directive("timevault::raft::log=trace".parse()?);
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+    //.add_directive("timevault::raft::log=trace".parse()?);
 
     tracing_subscriber::fmt()
         .with_target(true)

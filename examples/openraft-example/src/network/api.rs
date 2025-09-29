@@ -17,7 +17,7 @@ pub async fn write(app: Data<App>, req: Json<ExampleEvent>) -> actix_web::Result
 #[get("/read")]
 pub async fn read(app: Data<App>) -> actix_web::Result<impl Responder> {
     let devices: Vec<DeviceStatus> = app.snapshot_devices();
-    Ok(Json(devices))
+    Ok(Json(Ok::<_, crate::typ::RaftError>(devices)))
 }
 
 #[derive(Serialize)]
