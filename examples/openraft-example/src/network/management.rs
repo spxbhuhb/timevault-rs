@@ -1,17 +1,17 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
+use actix_web::Responder;
 use actix_web::get;
 use actix_web::post;
 use actix_web::web::Data;
 use actix_web::web::Json;
-use actix_web::Responder;
-use openraft::error::Infallible;
 use openraft::BasicNode;
 use openraft::RaftMetrics;
+use openraft::error::Infallible;
 
-use crate::app::App;
 use crate::TvrNodeId;
+use crate::app::App;
 
 // --- Cluster management
 
@@ -22,8 +22,8 @@ use crate::TvrNodeId;
 /// (by calling `change-membership`)
 #[post("/add-learner")]
 pub async fn add_learner(app: Data<App>, req: Json<(TvrNodeId, String)>) -> actix_web::Result<impl Responder> {
-    let node_id = req.0 .0;
-    let node = BasicNode { addr: req.0 .1.clone() };
+    let node_id = req.0.0;
+    let node = BasicNode { addr: req.0.1.clone() };
     let res = app.raft.add_learner(node_id, node, true).await;
     Ok(Json(res))
 }

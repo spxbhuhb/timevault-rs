@@ -3,22 +3,19 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use openraft::error::ForwardToLeader;
-use openraft::error::NetworkError;
-use openraft::error::RemoteError;
 use openraft::BasicNode;
 use openraft::RaftMetrics;
 use openraft::TryAsRef;
-use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use openraft::error::ForwardToLeader;
+use openraft::error::NetworkError;
+use openraft::error::RemoteError;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use tokio::time::timeout;
 
-use crate::TvrNodeId;
-use crate::{typ, ValueRequest};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Empty {}
+use crate::state::DeviceStatus;
+use crate::typ;
+use crate::{ExampleEvent, TvrNodeId};
 
 pub struct ExampleClient {
     /// The leader node to send request to.
@@ -46,22 +43,20 @@ impl ExampleClient {
     /// will be applied to state machine.
     ///
     /// The result of applying the request will be returned.
-    pub async fn write(&self, req: &ValueRequest) -> Result<typ::ClientWriteResponse, typ::RPCError<typ::ClientWriteError>> {
+    pub async fn write(&self, req: &ExampleEvent) -> Result<typ::ClientWriteResponse, typ::RPCError<typ::ClientWriteError>> {
         self.send_rpc_to_leader("write", Some(req)).await
     }
 
-    /// Read value by key, in an inconsistent mode.
-    ///
-    /// This method may return stale value because it does not force to read on a legal leader.
-    pub async fn read(&self, req: &String) -> Result<String, typ::RPCError> {
-        self.do_send_rpc_to_leader("read", Some(req)).await
+    /// Read device statuses from the leader.
+    pub async fn read(&self) -> Result<Vec<DeviceStatus>, typ::RPCError> {
+        self.do_send_rpc_to_leader("read", None::<&()>).await
     }
 
     /// Consistent Read value by key, in an inconsistent mode.
     ///
     /// This method MUST return consistent value or CheckIsLeaderError.
-    pub async fn consistent_read(&self, req: &String) -> Result<String, typ::RPCError<typ::CheckIsLeaderError>> {
-        self.do_send_rpc_to_leader("consistent_read", Some(req)).await
+    pub async fn consistent_read(&self) -> Result<Vec<DeviceStatus>, typ::RPCError<typ::CheckIsLeaderError>> {
+        self.do_send_rpc_to_leader("consistent_read", None::<&()>).await
     }
 
     // --- Cluster management API
@@ -79,10 +74,7 @@ impl ExampleClient {
     /// Add a node as learner.
     ///
     /// The node to add has to exist, i.e., being added with `write(ExampleRequest::AddNode{})`
-    pub async fn add_learner(
-        &self,
-        req: (TvrNodeId, String),
-    ) -> Result<typ::ClientWriteResponse, typ::RPCError<typ::ClientWriteError>> {
+    pub async fn add_learner(&self, req: (TvrNodeId, String)) -> Result<typ::ClientWriteResponse, typ::RPCError<typ::ClientWriteError>> {
         self.send_rpc_to_leader("add-learner", Some(&req)).await
     }
 
@@ -90,10 +82,7 @@ impl ExampleClient {
     ///
     /// All nodes in `req` have to be already added as learner with [`add_learner`],
     /// or an error [`LearnerNotFound`] will be returned.
-    pub async fn change_membership(
-        &self,
-        req: &BTreeSet<TvrNodeId>,
-    ) -> Result<typ::ClientWriteResponse, typ::RPCError<typ::ClientWriteError>> {
+    pub async fn change_membership(&self, req: &BTreeSet<TvrNodeId>) -> Result<typ::ClientWriteResponse, typ::RPCError<typ::ClientWriteError>> {
         self.send_rpc_to_leader("change-membership", Some(req)).await
     }
 
@@ -114,11 +103,7 @@ impl ExampleClient {
     /// The remote endpoint must respond a reply in form of `Result<T, E>`.
     /// An `Err` happened on remote will be wrapped in an
     /// [`openraft::error::RPCError::RemoteError`].
-    async fn do_send_rpc_to_leader<Req, Resp, Err>(
-        &self,
-        uri: &str,
-        req: Option<&Req>,
-    ) -> Result<Resp, typ::RPCError<Err>>
+    async fn do_send_rpc_to_leader<Req, Resp, Err>(&self, uri: &str, req: Option<&Req>) -> Result<Resp, typ::RPCError<Err>>
     where
         Req: Serialize + 'static,
         Resp: Serialize + DeserializeOwned,
@@ -131,11 +116,7 @@ impl ExampleClient {
         };
 
         let fu = if let Some(r) = req {
-            tracing::debug!(
-                ">>> client send request to {}: {}",
-                url,
-                serde_json::to_string_pretty(&r).unwrap()
-            );
+            tracing::debug!(">>> client send request to {}: {}", url, serde_json::to_string_pretty(&r).unwrap());
             self.inner.post(url.clone()).json(r)
         } else {
             tracing::debug!(">>> client send request to {}", url,);
@@ -152,13 +133,8 @@ impl ExampleClient {
             }
         };
 
-        let res: Result<Resp, typ::RaftError<Err>> =
-            resp.json().await.map_err(|e| typ::RPCError::Network(NetworkError::new(&e)))?;
-        tracing::debug!(
-            "<<< client recv reply from {}: {}",
-            url,
-            serde_json::to_string_pretty(&res).unwrap()
-        );
+        let res: Result<Resp, typ::RaftError<Err>> = resp.json().await.map_err(|e| typ::RPCError::Network(NetworkError::new(&e)))?;
+        tracing::debug!("<<< client recv reply from {}: {}", url, serde_json::to_string_pretty(&res).unwrap());
 
         res.map_err(|e| typ::RPCError::RemoteError(RemoteError::new(leader_id, e)))
     }

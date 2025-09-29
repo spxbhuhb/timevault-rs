@@ -4,46 +4,36 @@
 use std::sync::Arc;
 
 use crate::app::App;
+use crate::network::Network;
 use crate::network::api;
 use crate::network::management;
 use crate::network::raft;
-use crate::network::Network;
+use crate::state::{ExampleStateMachine, SharedDeviceState, new_shared_device_state};
+use actix_web::HttpServer;
 use actix_web::middleware;
 use actix_web::middleware::Logger;
 use actix_web::web::Data;
-use actix_web::HttpServer;
 use openraft::Config;
-use serde::{Deserialize, Serialize};
-use timevault::store::partition::PartitionConfig;
-use timevault::raft::log::TvrLogAdapter;
-use timevault::raft::state::TvrPartitionStateMachine;
-use timevault::raft::{TvrConfig, TvrNodeId};
 use timevault::PartitionHandle;
+use timevault::raft::log::TvrLogAdapter;
+use timevault::raft::{TvrConfig, TvrNodeId};
+use timevault::store::partition::PartitionConfig;
 use uuid::Uuid;
 
 pub mod app;
 pub mod client;
 pub mod network;
+pub mod state;
 
-pub type ValueRequest = serde_json::Value;
+pub use state::{ExampleEvent, ExampleResponse};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ValueResponse(pub Result<serde_json::Value, serde_json::Value>);
+pub type ExampleConfig = TvrConfig<ExampleEvent, ExampleResponse>;
+pub type ExampleLogStore = TvrLogAdapter<ExampleEvent, ExampleResponse>;
 
-impl Default for ValueResponse {
-    fn default() -> Self {
-        Self(Ok(serde_json::Value::Null))
-    }
-}
-
-pub type ValueConfig = TvrConfig<ValueRequest, ValueResponse>;
-pub type ValueLogStore = TvrLogAdapter<ValueRequest, ValueResponse>;
-pub type ValueStateMachine = TvrPartitionStateMachine<ValueRequest, ValueResponse>;
-
-pub type Raft = openraft::Raft<ValueConfig>;
+pub type Raft = openraft::Raft<ExampleConfig>;
 
 pub mod typ {
-    use crate::ValueConfig;
+    use crate::ExampleConfig;
     use openraft::BasicNode;
     use timevault::raft::TvrNodeId;
 
@@ -55,24 +45,28 @@ pub mod typ {
     pub type ForwardToLeader = openraft::error::ForwardToLeader<TvrNodeId, BasicNode>;
     pub type InitializeError = openraft::error::InitializeError<TvrNodeId, BasicNode>;
 
-    pub type ClientWriteResponse = openraft::raft::ClientWriteResponse<ValueConfig>;
+    pub type ClientWriteResponse = openraft::raft::ClientWriteResponse<ExampleConfig>;
 }
 
-pub async fn start_example_raft_node(node_id: TvrNodeId, root : &str, http_addr: String) -> anyhow::Result<()> {
+pub async fn start_example_raft_node(node_id: TvrNodeId, root: &str, http_addr: String) -> anyhow::Result<()> {
     // Create a partition for storing raft logs and state machine snapshots.
     let root = std::path::PathBuf::from(&root);
     std::fs::create_dir_all(&root)?;
 
-    let part_id = Uuid::now_v7();
+    let log_part_id = Uuid::now_v7();
+    let event_part_id = Uuid::now_v7();
 
     let mut cfg = PartitionConfig::default();
     cfg.format_plugin = "jsonl".to_string();
 
-    let part = PartitionHandle::create(root.clone(), part_id, cfg)?;
+    let log_part = PartitionHandle::create(root.clone(), log_part_id, cfg.clone())?;
+    let event_part = PartitionHandle::create(root.clone(), event_part_id, cfg)?;
 
     // Build storage components using timevault adapters.
-    let log_store = ValueLogStore::new(part.clone(), node_id);
-    let state_machine_store = ValueStateMachine::new(part.clone())?;
+    let log_store = ExampleLogStore::new(log_part, node_id);
+
+    let devices: SharedDeviceState = new_shared_device_state();
+    let state_machine_store = ExampleStateMachine::new(event_part.clone(), devices.clone())?;
 
     // Build openraft Config
     let config = Config {
@@ -88,21 +82,16 @@ pub async fn start_example_raft_node(node_id: TvrNodeId, root : &str, http_addr:
     let network = Network {};
 
     // Create a local raft instance.
-    let raft = Raft::new(
-        node_id,
-        config,
-        network,
-        log_store,
-        state_machine_store,
-    )
-    .await?;
+    let raft = Raft::new(node_id, config, network, log_store, state_machine_store).await?;
 
     // Create an application that will store all the instances created above, this will
     // later be used on the actix-web services.
     let app_data = Data::new(App {
         id: node_id,
         addr: http_addr.clone(),
-        raft
+        raft,
+        devices,
+        event_partition: event_part,
     });
 
     // Start the actix-web server.
@@ -124,7 +113,10 @@ pub async fn start_example_raft_node(node_id: TvrNodeId, root : &str, http_addr:
             // application API
             .service(api::write)
             .service(api::read)
-            //.service(api::consistent_read)
+            .service(api::transfer_manifest)
+            .service(api::transfer_chunk)
+            .service(api::transfer_index)
+        //.service(api::consistent_read)
     });
 
     let x = server.bind(http_addr)?;

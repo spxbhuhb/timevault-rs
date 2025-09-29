@@ -1518,6 +1518,7 @@ dependencies = [
  "maplit",
  "openraft",
  "openraft-macros",
+ "parking_lot",
  "reqwest",
  "serde",
  "serde_json",
