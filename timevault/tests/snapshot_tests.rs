@@ -121,6 +121,202 @@ fn setup_store() -> (TempDir, Store) {
 }
 
 #[test]
+fn install_snapshot_handles_empty_partition() {
+    let (_temp, store) = setup_store();
+
+    let partition_id = Uuid::now_v7();
+    let metadata = default_metadata(partition_id);
+
+    // Seed partition and add stale files that should be removed.
+    let handle = store.ensure_partition(&metadata).unwrap();
+    drop(handle);
+    let part_dir = paths::partition_dir(store.root_path(), partition_id);
+    let chunks_dir = paths::chunks_dir(&part_dir);
+    fs::create_dir_all(&chunks_dir).unwrap();
+    let stale_chunk = paths::chunk_file(&chunks_dir, 9);
+    fs::write(&stale_chunk, b"old-chunk").unwrap();
+    let stale_index = paths::index_file(&chunks_dir, 9);
+    fs::write(&stale_index, b"{}").unwrap();
+
+    let transfer = MockTransfer::default().with_manifest(partition_id, vec![]);
+
+    let snapshot = StoreSnapshot {
+        partitions: vec![PartitionSnapshot {
+            partition_id,
+            partition_metadata: metadata,
+            last_chunk_id: None,
+            last_chunk_size: 0,
+            last_order_key: None,
+        }],
+    };
+
+    install_store_snapshot(&store, &transfer, &snapshot).unwrap();
+
+    let manifest_path = paths::partition_manifest(&part_dir);
+    let manifest_text = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest_text.trim().is_empty());
+
+    assert!(!stale_chunk.exists());
+    assert!(!stale_index.exists());
+
+    store.open_partition(partition_id).unwrap();
+}
+
+#[test]
+fn install_snapshot_handles_single_chunk_partition() {
+    let (_temp, store) = setup_store();
+
+    let partition_id = Uuid::now_v7();
+    let metadata = default_metadata(partition_id);
+
+    let chunk_id = 1;
+    let manifest_lines = vec![ManifestLine { chunk_id, min_order_key: 10, max_order_key: None }];
+    let chunk_data = b"abcdef".to_vec();
+    let target_len = chunk_data.len() as u64;
+    let index_lines = vec![
+        IndexLine {
+            block_min_key: 10,
+            block_max_key: 15,
+            file_offset_bytes: 0,
+            block_len_bytes: 3,
+        },
+        IndexLine {
+            block_min_key: 16,
+            block_max_key: 20,
+            file_offset_bytes: 3,
+            block_len_bytes: 3,
+        },
+    ];
+
+    let transfer = MockTransfer::default()
+        .with_manifest(partition_id, manifest_lines.clone())
+        .with_chunk(partition_id, chunk_id, chunk_data.clone())
+        .with_index(partition_id, chunk_id, serialize_index_lines(&index_lines));
+
+    let snapshot = StoreSnapshot {
+        partitions: vec![PartitionSnapshot {
+            partition_id,
+            partition_metadata: metadata,
+            last_chunk_id: Some(chunk_id),
+            last_chunk_size: target_len,
+            last_order_key: Some(20),
+        }],
+    };
+
+    install_store_snapshot(&store, &transfer, &snapshot).unwrap();
+
+    let part_dir = paths::partition_dir(store.root_path(), partition_id);
+    let manifest_path = paths::partition_manifest(&part_dir);
+    let manifest_text = fs::read_to_string(&manifest_path).unwrap();
+    let applied_manifest: Vec<ManifestLine> = manifest_text
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(applied_manifest.len(), 1);
+    assert_eq!(applied_manifest[0].chunk_id, chunk_id);
+    assert_eq!(applied_manifest[0].min_order_key, 10);
+    assert!(applied_manifest[0].max_order_key.is_none());
+
+    let chunks_dir = paths::chunks_dir(&part_dir);
+    let chunk_path = paths::chunk_file(&chunks_dir, chunk_id);
+    assert_eq!(fs::metadata(&chunk_path).unwrap().len(), target_len);
+
+    let index_path = paths::index_file(&chunks_dir, chunk_id);
+    let index_text = fs::read_to_string(&index_path).unwrap();
+    let applied_index: Vec<IndexLine> = index_text
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(applied_index.len(), index_lines.len());
+    for (applied, expected) in applied_index.iter().zip(index_lines.iter()) {
+        assert_eq!(applied.block_min_key, expected.block_min_key);
+        assert_eq!(applied.block_max_key, expected.block_max_key);
+        assert_eq!(applied.file_offset_bytes, expected.file_offset_bytes);
+        assert_eq!(applied.block_len_bytes, expected.block_len_bytes);
+    }
+
+    store.open_partition(partition_id).unwrap();
+}
+
+#[test]
+fn install_snapshot_handles_open_chunk_without_last_order_key() {
+    let (_temp, store) = setup_store();
+
+    let partition_id = Uuid::now_v7();
+    let metadata = default_metadata(partition_id);
+
+    let chunk_id = 3;
+    let manifest_lines = vec![ManifestLine { chunk_id, min_order_key: 50, max_order_key: None }];
+    let chunk_data = b"abcdefgh".to_vec();
+    let target_len = 3u64;
+    let index_lines = vec![
+        IndexLine {
+            block_min_key: 50,
+            block_max_key: 55,
+            file_offset_bytes: 0,
+            block_len_bytes: 2,
+        },
+        IndexLine {
+            block_min_key: 56,
+            block_max_key: 60,
+            file_offset_bytes: 2,
+            block_len_bytes: 6,
+        },
+    ];
+
+    let transfer = MockTransfer::default()
+        .with_manifest(partition_id, manifest_lines.clone())
+        .with_chunk(partition_id, chunk_id, chunk_data.clone())
+        .with_index(partition_id, chunk_id, serialize_index_lines(&index_lines));
+
+    let snapshot = StoreSnapshot {
+        partitions: vec![PartitionSnapshot {
+            partition_id,
+            partition_metadata: metadata,
+            last_chunk_id: Some(chunk_id),
+            last_chunk_size: target_len,
+            last_order_key: None,
+        }],
+    };
+
+    install_store_snapshot(&store, &transfer, &snapshot).unwrap();
+
+    let part_dir = paths::partition_dir(store.root_path(), partition_id);
+    let manifest_path = paths::partition_manifest(&part_dir);
+    let manifest_text = fs::read_to_string(&manifest_path).unwrap();
+    let applied_manifest: Vec<ManifestLine> = manifest_text
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(applied_manifest.len(), 1);
+    assert_eq!(applied_manifest[0].chunk_id, chunk_id);
+    assert_eq!(applied_manifest[0].min_order_key, 50);
+    assert!(applied_manifest[0].max_order_key.is_none());
+
+    let chunks_dir = paths::chunks_dir(&part_dir);
+    let chunk_path = paths::chunk_file(&chunks_dir, chunk_id);
+    assert_eq!(fs::metadata(&chunk_path).unwrap().len(), target_len);
+
+    let index_path = paths::index_file(&chunks_dir, chunk_id);
+    let index_text = fs::read_to_string(&index_path).unwrap();
+    let applied_index: Vec<IndexLine> = index_text
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(applied_index.len(), 1);
+    assert_eq!(applied_index[0].block_min_key, index_lines[0].block_min_key);
+    assert_eq!(applied_index[0].block_max_key, index_lines[0].block_max_key);
+    assert_eq!(applied_index[0].file_offset_bytes, index_lines[0].file_offset_bytes);
+    assert_eq!(applied_index[0].block_len_bytes, index_lines[0].block_len_bytes);
+
+    store.open_partition(partition_id).unwrap();
+}
+
+#[test]
 fn install_snapshot_syncs_chunks_and_cleans_up() {
     let (_temp, store) = setup_store();
 
