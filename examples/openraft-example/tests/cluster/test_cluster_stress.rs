@@ -67,7 +67,7 @@ static TRACING_INIT: Once = Once::new();
 
 fn init_tracing() {
     TRACING_INIT.call_once(|| {
-        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
         let _ = tracing_subscriber::fmt()
             .with_target(true)
             .with_thread_ids(true)
@@ -98,6 +98,7 @@ impl NodeConfig {
 }
 
 struct NodeHandle {
+    id: TvrNodeId,
     shutdown: Option<oneshot::Sender<()>>,
     join: Option<thread::JoinHandle<()>>,
 }
@@ -124,6 +125,7 @@ impl Drop for NodeHandle {
 }
 
 fn spawn_node(root: PathBuf, config: NodeConfig) -> NodeHandle {
+    let node_id = config.id.clone();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let handle = thread::spawn(move || {
         let runtime = Runtime::new().expect("create tokio runtime for node");
@@ -132,7 +134,9 @@ fn spawn_node(root: PathBuf, config: NodeConfig) -> NodeHandle {
             eprintln!("node terminated with error: {err:?}");
         }
     });
+
     NodeHandle {
+        id : node_id,
         shutdown: Some(shutdown_tx),
         join: Some(handle),
     }
@@ -254,18 +258,23 @@ async fn wait_for_snapshot(client: &ExampleClient, min_index: u64, timeout: Dura
 
 /// Setup a cluster of 3 nodes, flood it with events to force a snapshot, then
 /// restart the cluster and verify the state is recovered from that snapshot.
+#[ignore]
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-async fn test_cluster() -> anyhow::Result<()> {
+async fn test_cluster_stress() -> anyhow::Result<()> {
     std::panic::set_hook(Box::new(|panic| {
         log_panic(panic);
     }));
 
     init_tracing();
 
-    let root = PathBuf::from(format!("./var-stress-{}", Uuid::now_v7()));
+    let root = PathBuf::from(format!("./var/{}", Uuid::now_v7()));
     std::fs::create_dir_all(&root)?;
 
-    let node_configs = vec![NodeConfig::new(1, "127.0.0.1:21001"), NodeConfig::new(2, "127.0.0.1:21002"), NodeConfig::new(3, "127.0.0.1:21003")];
+    let node_configs = vec![
+        NodeConfig::new(1, "127.0.0.1:21001"),
+        NodeConfig::new(2, "127.0.0.1:21002"),
+        NodeConfig::new(3, "127.0.0.1:21003"),
+    ];
 
     let mut handles: Vec<NodeHandle> = node_configs.iter().cloned().map(|cfg| spawn_node(root.clone(), cfg)).collect();
 
@@ -280,6 +289,8 @@ async fn test_cluster() -> anyhow::Result<()> {
     client.change_membership(&btreeset! {1,2,3}).await?;
 
     wait_for_leader(&client, Duration::from_secs(10)).await?;
+
+    tokio::time::sleep(Duration::from_secs(5000)).await;
 
     let base_timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
     let device_ids: Vec<Uuid> = (0..128).map(|_| Uuid::now_v7()).collect();

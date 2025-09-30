@@ -12,6 +12,9 @@ fn_single_line = true
 fn_params_layout = "Tall"        # one param per line if it doesn’t fit
 spaces_around_ranges = true
 
+# Arrays
+array_width= 40
+
 # Structs & enums
 struct_lit_width = 40
 enum_discrim_align_threshold = 20
