@@ -1,20 +1,34 @@
 use std::backtrace::Backtrace;
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 #[allow(deprecated)]
 use std::panic::PanicInfo;
+use std::path::PathBuf;
+use std::sync::{Arc, Once};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use maplit::btreemap;
+use actix_web::App as ActixApp;
+use actix_web::HttpServer;
+use actix_web::web::Data;
 use maplit::btreeset;
-use openraft::BasicNode;
+use openraft::Config;
+use openraft::LogId;
+use openraft::SnapshotPolicy;
 use std::time::{SystemTime, UNIX_EPOCH};
-
-use openraft_example::client::ExampleClient;
-use openraft_example::start_example_raft_node;
-use openraft_example::state::{DeviceStatus, ExampleEvent};
 use tokio::runtime::Runtime;
+use tokio::sync::oneshot;
 use tracing_subscriber::EnvFilter;
+
+use openraft_example::app::App;
+use openraft_example::client::ExampleClient;
+use openraft_example::network::{Network, api, management, raft};
+use openraft_example::state::{DeviceStatus, ExampleEvent, ExampleStateMachine, new_shared_device_state};
+use openraft_example::{ExampleLogStore, Raft};
+use timevault::PartitionHandle;
+use timevault::raft::TvrNodeId;
+use timevault::store::partition::PartitionConfig;
+use timevault::store::paths;
+use uuid::Uuid;
 
 #[allow(deprecated)]
 pub fn log_panic(panic: &PanicInfo) {
@@ -49,175 +63,300 @@ pub fn log_panic(panic: &PanicInfo) {
     eprintln!("{}", backtrace);
 }
 
-/// Setup a cluster of 3 nodes.
-/// Write to it and read from it.
-//#[ignore]
+static TRACING_INIT: Once = Once::new();
+
+fn init_tracing() {
+    TRACING_INIT.call_once(|| {
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+        let _ = tracing_subscriber::fmt()
+            .with_target(true)
+            .with_thread_ids(true)
+            .with_level(true)
+            .with_ansi(false)
+            .with_env_filter(filter)
+            .try_init();
+    });
+}
+
+#[derive(Clone)]
+struct NodeConfig {
+    pub id: TvrNodeId,
+    pub http_addr: String,
+    pub log_part: Uuid,
+    pub state_part: Uuid,
+}
+
+impl NodeConfig {
+    fn new(id: TvrNodeId, http_addr: &str) -> Self {
+        Self {
+            id,
+            http_addr: http_addr.to_string(),
+            log_part: Uuid::now_v7(),
+            state_part: Uuid::now_v7(),
+        }
+    }
+}
+
+struct NodeHandle {
+    shutdown: Option<oneshot::Sender<()>>,
+    join: Option<thread::JoinHandle<()>>,
+}
+
+impl NodeHandle {
+    fn stop_inner(&mut self) {
+        if let Some(tx) = self.shutdown.take() {
+            let _ = tx.send(());
+        }
+        if let Some(handle) = self.join.take() {
+            let _ = handle.join();
+        }
+    }
+
+    fn stop(mut self) {
+        self.stop_inner();
+    }
+}
+
+impl Drop for NodeHandle {
+    fn drop(&mut self) {
+        self.stop_inner();
+    }
+}
+
+fn spawn_node(root: PathBuf, config: NodeConfig) -> NodeHandle {
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle = thread::spawn(move || {
+        let runtime = Runtime::new().expect("create tokio runtime for node");
+        let res = runtime.block_on(run_node(root, config, shutdown_rx));
+        if let Err(err) = res {
+            eprintln!("node terminated with error: {err:?}");
+        }
+    });
+    NodeHandle {
+        shutdown: Some(shutdown_tx),
+        join: Some(handle),
+    }
+}
+
+async fn run_node(root: PathBuf, config: NodeConfig, shutdown_rx: oneshot::Receiver<()>) -> anyhow::Result<()> {
+    let NodeConfig { id, http_addr, log_part, state_part } = config;
+
+    let mut part_cfg = PartitionConfig::default();
+    part_cfg.format_plugin = "jsonl".to_string();
+
+    let log_part = open_or_create_partition(&root, log_part, &part_cfg)?;
+    let event_part = open_or_create_partition(&root, state_part, &part_cfg)?;
+
+    let log_store = ExampleLogStore::new(log_part, id);
+    let devices = new_shared_device_state();
+    let state_machine_store = ExampleStateMachine::new(event_part.clone(), devices.clone())?;
+
+    let mut config = Config {
+        heartbeat_interval: 500,
+        election_timeout_min: 1500,
+        election_timeout_max: 3000,
+        ..Default::default()
+    };
+    config.snapshot_policy = SnapshotPolicy::LogsSinceLast(20);
+    let config = Arc::new(config.validate()?);
+
+    let network = Network {};
+    let raft = Raft::new(id, config, network, log_store, state_machine_store).await?;
+
+    let app_data = Data::new(App {
+        id,
+        addr: http_addr.clone(),
+        raft,
+        devices,
+        event_partition: event_part,
+    });
+
+    let server = HttpServer::new(move || {
+        ActixApp::new()
+            .app_data(app_data.clone())
+            .service(raft::append)
+            .service(raft::snapshot)
+            .service(raft::vote)
+            .service(management::init)
+            .service(management::add_learner)
+            .service(management::change_membership)
+            .service(management::metrics)
+            .service(api::write)
+            .service(api::read)
+            .service(api::transfer_manifest)
+            .service(api::transfer_chunk)
+            .service(api::transfer_index)
+    })
+    .bind(http_addr.clone())?
+    .run();
+
+    let handle = server.handle();
+    tokio::pin!(server);
+
+    tokio::select! {
+        res = &mut server => {
+            res?;
+            Ok(())
+        }
+        _ = async {
+            let _ = shutdown_rx.await;
+        } => {
+            handle.stop(true).await;
+            Ok(())
+        }
+    }
+}
+
+fn open_or_create_partition(root: &PathBuf, id: Uuid, cfg: &PartitionConfig) -> anyhow::Result<PartitionHandle> {
+    let part_dir = paths::partition_dir(root, id);
+    let metadata_path = paths::partition_metadata(&part_dir);
+    if metadata_path.exists() {
+        Ok(PartitionHandle::open(root.clone(), id)?)
+    } else {
+        Ok(PartitionHandle::create(root.clone(), id, cfg.clone())?)
+    }
+}
+
+async fn wait_for_leader(client: &ExampleClient, timeout: Duration) -> anyhow::Result<TvrNodeId> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Ok(metrics) = client.metrics().await {
+            if let Some(leader) = metrics.current_leader {
+                return Ok(leader);
+            }
+        }
+
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for leader");
+        }
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn wait_for_snapshot(client: &ExampleClient, min_index: u64, timeout: Duration) -> anyhow::Result<LogId<TvrNodeId>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let metrics = client.metrics().await?;
+        if let Some(snapshot) = metrics.snapshot {
+            if snapshot.index >= min_index {
+                return Ok(snapshot);
+            }
+        }
+
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for snapshot; last snapshot: {:?}", metrics.snapshot);
+        }
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Setup a cluster of 3 nodes, flood it with events to force a snapshot, then
+/// restart the cluster and verify the state is recovered from that snapshot.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_cluster() -> anyhow::Result<()> {
-    // --- The client itself does not store addresses for all nodes, but just node id.
-    //     Thus we need a supporting component to provide mapping from node id to node address.
-    //     This is only used by the client. A raft node in this example stores node addresses in its
-    // store.
-
     std::panic::set_hook(Box::new(|panic| {
         log_panic(panic);
     }));
 
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
-    //.add_directive("timevault::raft::log=trace".parse()?);
+    init_tracing();
 
-    tracing_subscriber::fmt()
-        .with_target(true)
-        .with_thread_ids(true)
-        .with_level(true)
-        .with_ansi(false)
-        .with_env_filter(filter)
-        .init();
+    let root = PathBuf::from(format!("./var-stress-{}", Uuid::now_v7()));
+    std::fs::create_dir_all(&root)?;
 
-    let root = "./var";
+    let node_configs = vec![NodeConfig::new(1, "127.0.0.1:21001"), NodeConfig::new(2, "127.0.0.1:21002"), NodeConfig::new(3, "127.0.0.1:21003")];
 
-    // Clear the root directory recursively to ensure a clean test environment
-    let _ = std::fs::remove_dir_all(root);
-    std::fs::create_dir_all(root)?;
+    let mut handles: Vec<NodeHandle> = node_configs.iter().cloned().map(|cfg| spawn_node(root.clone(), cfg)).collect();
 
-    let get_addr = |node_id| {
-        let addr = match node_id {
-            1 => "127.0.0.1:21001".to_string(),
-            2 => "127.0.0.1:21002".to_string(),
-            3 => "127.0.0.1:21003".to_string(),
-            _ => {
-                return Err(anyhow::anyhow!("node {} not found", node_id));
-            }
-        };
-        Ok(addr)
-    };
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // --- Start 3 raft node in 3 threads.
+    let leader_cfg = &node_configs[0];
+    let client = ExampleClient::new(leader_cfg.id, leader_cfg.http_addr.clone());
 
-    let _h1 = thread::spawn(|| {
-        let rt = Runtime::new().unwrap();
-        let x = rt.block_on(start_example_raft_node(1, root, "127.0.0.1:21001".to_string()));
-        println!("x: {:?}", x);
-    });
-
-    let _h2 = thread::spawn(|| {
-        let rt = Runtime::new().unwrap();
-        let x = rt.block_on(start_example_raft_node(2, root, "127.0.0.1:21002".to_string()));
-        println!("x: {:?}", x);
-    });
-
-    let _h3 = thread::spawn(|| {
-        let rt = Runtime::new().unwrap();
-        let x = rt.block_on(start_example_raft_node(3, root, "127.0.0.1:21003".to_string()));
-        println!("x: {:?}", x);
-    });
-
-    // Wait for server to start up.
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    // --- Create a client to the first node, as a control handle to the cluster.
-
-    let client = ExampleClient::new(1, get_addr(1)?);
-
-    // --- 1. Initialize the target node as a cluster of only one node.
-    //        After init(), the single node cluster will be fully functional.
-
-    println!("=== init single node cluster");
     client.init().await?;
+    client.add_learner((node_configs[1].id, node_configs[1].http_addr.clone())).await?;
+    client.add_learner((node_configs[2].id, node_configs[2].http_addr.clone())).await?;
+    client.change_membership(&btreeset! {1,2,3}).await?;
 
-    println!("=== metrics after init");
-    let _x = client.metrics().await?;
+    wait_for_leader(&client, Duration::from_secs(10)).await?;
 
-    // --- 2. Add node 2 and 3 to the cluster as `Learner`, to let them start to receive log replication
-    // from the        leader.
+    let base_timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
+    let device_ids: Vec<Uuid> = (0..128).map(|_| Uuid::now_v7()).collect();
+    let mut expected_statuses: HashMap<Uuid, DeviceStatus> = HashMap::new();
+    let total_events = 100u64;
+    let snapshot_min_index = 40u64;
 
-    println!("=== add-learner 2");
-    let _x = client.add_learner((2, get_addr(2)?)).await?;
+    for idx in 0..total_events {
+        let device = device_ids[idx as usize % device_ids.len()];
+        let event_id = Uuid::now_v7();
+        let timestamp = base_timestamp + idx as i64;
+        let is_online = idx % 3 != 0;
+        let event = if is_online {
+            ExampleEvent::DeviceOnline { event_id, device_id: device, timestamp }
+        } else {
+            ExampleEvent::DeviceOffline { event_id, device_id: device, timestamp }
+        };
+        expected_statuses.insert(
+            device,
+            DeviceStatus {
+                device_id: device,
+                is_online,
+                last_event_id: event_id,
+                last_timestamp: timestamp,
+            },
+        );
+        client.write(&event).await?;
+    }
 
-    println!("=== add-learner 3");
-    let _x = client.add_learner((3, get_addr(3)?)).await?;
+    let snapshot_log = wait_for_snapshot(&client, snapshot_min_index, Duration::from_secs(60)).await?;
+    assert!(snapshot_log.index >= snapshot_min_index);
 
-    println!("=== metrics after add-learner");
-    let x = client.metrics().await?;
+    let snapshot_path = paths::partition_dir(&root, leader_cfg.state_part).join("raft_state.json");
+    assert!(snapshot_path.exists(), "snapshot file should exist at {:?}", snapshot_path);
 
-    assert_eq!(&vec![btreeset![1]], x.membership_config.membership().get_joint_config());
+    for handle in handles.drain(..) {
+        handle.stop();
+    }
 
-    let nodes_in_cluster = x.membership_config.nodes().map(|(nid, node)| (*nid, node.clone())).collect::<BTreeMap<_, _>>();
-    assert_eq!(
-        btreemap! {
-            1 => BasicNode::new("127.0.0.1:21001"),
-            2 => BasicNode::new("127.0.0.1:21002"),
-            3 => BasicNode::new("127.0.0.1:21003"),
-        },
-        nodes_in_cluster
-    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // --- 3. Turn the two learners to members. A member node can vote or elect itself as leader.
+    let mut handles: Vec<NodeHandle> = node_configs.iter().cloned().map(|cfg| spawn_node(root.clone(), cfg)).collect();
 
-    println!("=== change-membership to 1,2,3");
-    let _x = client.change_membership(&btreeset! {1,2,3}).await?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // --- After change-membership, some cluster state will be seen in the metrics.
-    //
-    // ```text
-    // metrics: RaftMetrics {
-    //   current_leader: Some(1),
-    //   membership_config: EffectiveMembership {
-    //        log_id: LogId { leader_id: LeaderId { term: 1, node_id: 1 }, index: 8 },
-    //        membership: Membership { learners: {}, configs: [{1, 2, 3}] }
-    //   },
-    //   leader_metrics: Some(LeaderMetrics { replication: {
-    //     2: ReplicationMetrics { matched: Some(LogId { leader_id: LeaderId { term: 1, node_id: 1 }, index: 7 }) },
-    //     3: ReplicationMetrics { matched: Some(LogId { leader_id: LeaderId { term: 1, node_id: 1 }, index: 8 }) }} })
-    // }
-    // ```
+    let client = ExampleClient::new(leader_cfg.id, leader_cfg.http_addr.clone());
+    wait_for_leader(&client, Duration::from_secs(20)).await?;
 
-    println!("=== metrics after change-member");
-    let x = client.metrics().await?;
-    assert_eq!(&vec![btreeset![1, 2, 3]], x.membership_config.membership().get_joint_config());
-
-    // --- Try to write some application data through the leader.
-
-    println!("=== write device online event");
-    let device_id = uuid::Uuid::now_v7();
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
-    let event = ExampleEvent::DeviceOnline {
-        event_id: uuid::Uuid::now_v7(),
-        device_id,
-        timestamp,
-    };
-    let _x = client.write(&event).await?;
-
-    // --- Wait for a while to let the replication get done.
-
-    tokio::time::sleep(Duration::from_millis(1_000)).await;
-
-    // --- Read it on every node.
-
-    println!("=== read statuses on node 1");
     let statuses = client.read().await?;
-    assert!(statuses.iter().any(|s: &DeviceStatus| s.device_id == device_id && s.is_online));
+    assert!(statuses.len() >= expected_statuses.len());
+    for (device, expected) in &expected_statuses {
+        let Some(found) = statuses.iter().find(|status| status.device_id == *device) else {
+            panic!("device {:?} missing after restart", device);
+        };
+        assert_eq!(found.is_online, expected.is_online);
+        assert_eq!(found.last_event_id, expected.last_event_id);
+        assert_eq!(found.last_timestamp, expected.last_timestamp);
+    }
 
-    println!("=== read statuses on node 2");
-    let client2 = ExampleClient::new(2, get_addr(2)?);
-    let statuses = client2.read().await?;
-    assert!(statuses.iter().any(|s: &DeviceStatus| s.device_id == device_id && s.is_online));
+    let verification_event = ExampleEvent::DeviceOnline {
+        event_id: Uuid::now_v7(),
+        device_id: device_ids[0],
+        timestamp: base_timestamp + total_events as i64 + 1,
+    };
+    client.write(&verification_event).await?;
 
-    println!("=== read statuses on node 3");
-    let client3 = ExampleClient::new(3, get_addr(3)?);
-    let statuses = client3.read().await?;
-    assert!(statuses.iter().any(|s: &DeviceStatus| s.device_id == device_id && s.is_online));
+    let refreshed = client.read().await?;
+    assert!(refreshed.iter().any(|status| status.device_id == device_ids[0] && status.is_online));
 
-    // --- Remove node 1,2 from the cluster.
+    for handle in handles.drain(..) {
+        handle.stop();
+    }
 
-    println!("=== change-membership to 3, ");
-    let _x = client.change_membership(&btreeset! {3}).await?;
-
-    tokio::time::sleep(Duration::from_millis(8_000)).await;
-
-    println!("=== metrics after change-membership to {{3}}");
-    let x = client.metrics().await?;
-    assert_eq!(&vec![btreeset![3]], x.membership_config.membership().get_joint_config());
+    // Clean up the temporary storage root so repeated test runs don't accumulate data.
+    if let Err(err) = std::fs::remove_dir_all(&root) {
+        tracing::warn!(?err, ?root, "failed to clean up temporary cluster directory");
+    }
 
     Ok(())
 }
