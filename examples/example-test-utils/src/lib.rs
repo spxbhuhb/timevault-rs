@@ -2,7 +2,7 @@ use std::backtrace::Backtrace;
 use std::collections::BTreeMap;
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use openraft::LogId;
@@ -126,6 +126,36 @@ pub async fn shutdown_nodes(node_addrs: &BTreeMap<u64, String>, handles: Vec<Joi
 pub fn client_for(node_addrs: &BTreeMap<u64, String>, leader_id: u64) -> anyhow::Result<ExampleClient> {
     let addr = get_addr(node_addrs, leader_id)?;
     Ok(ExampleClient::new(leader_id, addr))
+}
+
+/// Poll each node until its `/metrics` endpoint returns success.
+pub async fn wait_for_http_ready(node_addrs: &BTreeMap<u64, String>, timeout: Duration) -> anyhow::Result<()> {
+    let client = HttpClient::new();
+    for (&node_id, addr) in node_addrs {
+        let url = format!("http://{}/metrics", addr);
+        let deadline = Instant::now() + timeout;
+        let mut last_err: Option<String>;
+
+        loop {
+            match client.get(&url).send().await {
+                Ok(resp) if resp.status().is_success() => break,
+                Ok(resp) => {
+                    last_err = Some(format!("status {}", resp.status()));
+                }
+                Err(err) => {
+                    last_err = Some(err.to_string());
+                }
+            }
+
+            if Instant::now() >= deadline {
+                let detail = last_err.unwrap_or_else(|| "no response".to_string());
+                anyhow::bail!("timed out waiting for node {node_id} ({addr}) readiness: {detail}");
+            }
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+    Ok(())
 }
 
 /// Poll metrics until a leader is present or timeout occurs.
