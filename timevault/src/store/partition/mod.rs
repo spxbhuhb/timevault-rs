@@ -1,20 +1,20 @@
 pub mod append;
-pub mod read;
-pub mod roll;
-pub mod retention;
-pub mod recovery;
-pub mod truncate;
-pub mod purge;
 pub mod misc;
+pub mod purge;
+pub mod read;
+pub mod recovery;
+pub mod retention;
+pub mod roll;
+pub mod truncate;
 
-use crate::store::admin::stats::PartitionStats;
 use crate::errors::Result;
+use crate::store::admin::stats::PartitionStats;
 use parking_lot::{Mutex, RwLock};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
-use serde::{Deserialize, Serialize};
 
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub struct PartitionHandle {
     inner: std::sync::Arc<PartitionInner>,
 }
@@ -50,10 +50,14 @@ pub struct PartitionRuntime {
 }
 
 #[derive(Debug, Clone)]
-pub struct AppendAck { pub offset: u64 }
+pub struct AppendAck {
+    pub offset: u64,
+}
 
 #[derive(Debug, Clone)]
-pub struct PartitionConfigDelta { pub format_plugin: Option<String> }
+pub struct PartitionConfigDelta {
+    pub format_plugin: Option<String>,
+}
 
 impl PartitionHandle {
     pub fn create(root: PathBuf, id: Uuid, cfg: PartitionConfig) -> Result<Self> {
@@ -78,7 +82,9 @@ impl PartitionHandle {
         crate::store::disk::atomic::atomic_write_json(&meta_path, &meta)?;
         // Create empty manifest.json
         let manifest_path = crate::store::paths::partition_manifest(&part_dir);
-        if !manifest_path.exists() { std::fs::File::create(&manifest_path)?; }
+        if !manifest_path.exists() {
+            std::fs::File::create(&manifest_path)?;
+        }
         // Initialize runtime with partition context for newly created partition
         let mut rt = PartitionRuntime::default();
         rt.cur_partition_root = root.clone();
@@ -93,11 +99,13 @@ impl PartitionHandle {
         };
 
         tracing::debug!("Created partition {}", id);
-        
+
         Ok(Self { inner: std::sync::Arc::new(inner) })
     }
 
-    pub fn open(root: PathBuf, id: Uuid) -> Result<Self> { Self::open_with_opts(root, id, false) }
+    pub fn open(root: PathBuf, id: Uuid) -> Result<Self> {
+        Self::open_with_opts(root, id, false)
+    }
 
     pub fn open_with_opts(root: PathBuf, id: Uuid, read_only: bool) -> Result<Self> {
         // Resolve plugin and config from metadata when present
@@ -106,7 +114,15 @@ impl PartitionHandle {
         let (m, cfg): (crate::store::disk::metadata::MetadataJson, PartitionConfig) = if meta_path.exists() {
             let m = crate::store::disk::metadata::load_metadata(&meta_path)?;
             // Optionally validate id match; ignore mismatch to keep minimal
-            let cfg = PartitionConfig { format_version: m.format_version, format_plugin: m.format_plugin.clone(), chunk_roll: m.chunk_roll.clone(), index: m.index.clone(), retention: m.retention.clone(), key_is_timestamp: m.key_is_timestamp, logical_purge: m.logical_purge };
+            let cfg = PartitionConfig {
+                format_version: m.format_version,
+                format_plugin: m.format_plugin.clone(),
+                chunk_roll: m.chunk_roll.clone(),
+                index: m.index.clone(),
+                retention: m.retention.clone(),
+                key_is_timestamp: m.key_is_timestamp,
+                logical_purge: m.logical_purge,
+            };
             (m, cfg)
         } else {
             return Err(crate::errors::TvError::MissingFile { path: meta_path });
@@ -128,25 +144,49 @@ impl PartitionHandle {
         Ok(Self { inner: std::sync::Arc::new(inner) })
     }
 
-    pub fn id(&self) -> Uuid { self.inner.id }
+    pub fn id(&self) -> Uuid {
+        self.inner.id
+    }
     pub fn short_id(&self) -> String {
         let simple = self.inner.id.simple().to_string();
         simple[simple.len() - 6..].to_string()
     }
-    pub fn root(&self) -> &PathBuf { &self.inner.root }
-    pub fn cfg(&self) -> PartitionConfig { self.inner.cfg.read().clone() }
-    pub fn last_record(&self) -> Option<Vec<u8>> { self.inner.runtime.read().cur_last_record_bytes.clone() }
+    pub fn root(&self) -> &PathBuf {
+        &self.inner.root
+    }
+    pub fn cfg(&self) -> PartitionConfig {
+        self.inner.cfg.read().clone()
+    }
+    pub fn last_record(&self) -> Option<Vec<u8>> {
+        self.inner.runtime.read().cur_last_record_bytes.clone()
+    }
 
-    pub fn append(&self, order_key: u64, payload: &[u8]) -> Result<AppendAck> { append::append(self, order_key, payload) }
-    pub fn read_range(&self, from_key: u64, to_key: u64) -> Result<Vec<u8>> { read::read_range_blocks(self, from_key, to_key) }
-    pub fn force_roll(&self) -> Result<()> { roll::force_roll(self) }
-    pub fn stats(&self) -> PartitionStats { self.inner.stats.lock().clone() }
-    pub fn set_config(&self, delta: PartitionConfigDelta) -> Result<()> { append::set_config(self, delta) }
-    pub fn truncate(&self, order_key: u64) -> Result<()> { truncate::truncate(self, order_key) }
-    pub fn purge(&self, order_key: u64) -> Result<()> { purge::purge(self, order_key) }
+    pub fn append(&self, order_key: u64, payload: &[u8]) -> Result<AppendAck> {
+        append::append(self, order_key, payload)
+    }
+    pub fn read_range(&self, from_key: u64, to_key: u64) -> Result<Vec<u8>> {
+        read::read_range_blocks(self, from_key, to_key)
+    }
+    pub fn force_roll(&self) -> Result<()> {
+        roll::force_roll(self)
+    }
+    pub fn stats(&self) -> PartitionStats {
+        self.inner.stats.lock().clone()
+    }
+    pub fn set_config(&self, delta: PartitionConfigDelta) -> Result<()> {
+        append::set_config(self, delta)
+    }
+    pub fn truncate(&self, order_key: u64) -> Result<()> {
+        truncate::truncate(self, order_key)
+    }
+    pub fn purge(&self, order_key: u64) -> Result<()> {
+        purge::purge(self, order_key)
+    }
 
     #[cfg(test)]
-    pub fn cfg_mut_for_tests(&self) -> parking_lot::RwLockWriteGuard<'_, PartitionConfig> { self.inner.cfg.write() }
+    pub fn cfg_mut_for_tests(&self) -> parking_lot::RwLockWriteGuard<'_, PartitionConfig> {
+        self.inner.cfg.write()
+    }
 
     pub(crate) fn update_runtime<F>(&self, f: F)
     where
@@ -158,19 +198,39 @@ impl PartitionHandle {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChunkRollCfg { pub max_bytes: u64, pub max_hours: u64 }
+pub struct ChunkRollCfg {
+    pub max_bytes: u64,
+    pub max_hours: u64,
+}
 
-impl Default for ChunkRollCfg { fn default() -> Self { Self { max_bytes: 256_000_000, max_hours: 24 } } }
+impl Default for ChunkRollCfg {
+    fn default() -> Self {
+        Self { max_bytes: 256_000_000, max_hours: 24 }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IndexCfg { pub max_records: u32, pub max_hours: u64 }
+pub struct IndexCfg {
+    pub max_records: u32,
+    pub max_hours: u64,
+}
 
-impl Default for IndexCfg { fn default() -> Self { Self { max_records: 128, max_hours: 24 } } }
+impl Default for IndexCfg {
+    fn default() -> Self {
+        Self { max_records: 128, max_hours: 24 }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RetentionCfg { pub max_days: u64 }
+pub struct RetentionCfg {
+    pub max_days: u64,
+}
 
-impl Default for RetentionCfg { fn default() -> Self { Self { max_days: 365 } } }
+impl Default for RetentionCfg {
+    fn default() -> Self {
+        Self { max_days: 365 }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartitionConfig {
@@ -185,6 +245,14 @@ pub struct PartitionConfig {
 
 impl Default for PartitionConfig {
     fn default() -> Self {
-        Self { format_version: 1, format_plugin: "jsonl".into(), chunk_roll: Default::default(), index: Default::default(), retention: Default::default(), key_is_timestamp: true, logical_purge: false }
+        Self {
+            format_version: 1,
+            format_plugin: "jsonl".into(),
+            chunk_roll: Default::default(),
+            index: Default::default(),
+            retention: Default::default(),
+            key_is_timestamp: true,
+            logical_purge: false,
+        }
     }
 }

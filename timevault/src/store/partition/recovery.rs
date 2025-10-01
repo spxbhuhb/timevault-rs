@@ -2,9 +2,9 @@ use std::fs::File;
 use std::io::{Read, Seek};
 
 use crate::store::disk::index::{IndexLine, load_index_lines};
-use crate::store::plugins::FormatPlugin;
 use crate::store::partition::PartitionRuntime;
 use crate::store::paths;
+use crate::store::plugins::FormatPlugin;
 use uuid::Uuid;
 
 // Initialize runtime by using provided metadata for plugin selection, then manifest/index/chunk per design.md.
@@ -25,9 +25,13 @@ fn load_partition_runtime_data_inner(root: &std::path::Path, id: Uuid, plugin: &
     let part_dir = paths::partition_dir(root, id);
     let manifest_path = paths::partition_manifest(&part_dir);
     let mut cache = PartitionRuntime::default();
-    if !manifest_path.exists() { return Ok(cache); }
+    if !manifest_path.exists() {
+        return Ok(cache);
+    }
     let lines = crate::store::disk::manifest::load_manifest(&manifest_path)?;
-    let Some(last) = lines.last().cloned() else { return Ok(cache); };
+    let Some(last) = lines.last().cloned() else {
+        return Ok(cache);
+    };
 
     cache.cur_chunk_id = Some(last.chunk_id);
     cache.cur_chunk_min_order_key = last.min_order_key;
@@ -59,14 +63,19 @@ fn load_partition_runtime_data_inner(root: &std::path::Path, id: Uuid, plugin: &
     if let Some(max_key) = determined_max {
         cache.cur_chunk_max_order_key = max_key;
     } else {
-        return Err(crate::errors::TvError::Io(std::io::Error::new(std::io::ErrorKind::Other, "failed to determine cur_chunk_max_order_key from last chunk")));
+        return Err(crate::errors::TvError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "failed to determine cur_chunk_max_order_key from last chunk",
+        )));
     }
 
     Ok(cache)
 }
 
 fn load_last_index_and_start(index_path: &std::path::Path, cache: &mut PartitionRuntime) -> crate::errors::Result<(Option<IndexLine>, u64)> {
-    if !index_path.exists() { return Err(crate::errors::TvError::MissingFile { path: index_path.to_path_buf() }); }
+    if !index_path.exists() {
+        return Err(crate::errors::TvError::MissingFile { path: index_path.to_path_buf() });
+    }
     let f = File::open(index_path)?;
     let mut idx = load_index_lines(&f)?;
     if let Some(ix) = idx.pop() {
@@ -97,7 +106,9 @@ fn recover_tail_with_plugin_from_offset(chunk_path: &std::path::Path, start_off:
     // Read from positioned offset to EOF
     while let Some(m) = scanner.next()? {
         let key = m.ts_ms as u64; // map plugin ts to order_key
-        if first_key_in_scan.is_none() { first_key_in_scan = Some(key); }
+        if first_key_in_scan.is_none() {
+            first_key_in_scan = Some(key);
+        }
         last_key = Some(key);
         last_meta = Some((m.offset, m.len));
         rec_count += 1;
@@ -107,14 +118,20 @@ fn recover_tail_with_plugin_from_offset(chunk_path: &std::path::Path, start_off:
     if rec_count > 0 {
         // If there was no index, initialize min from first scanned record.
         if no_index {
-            if let Some(min_k) = first_key_in_scan { cache.cur_index_block_min_order_key = min_k; }
-            if let Some(max_k) = last_key { cache.cur_index_block_max_order_key = max_k; }
+            if let Some(min_k) = first_key_in_scan {
+                cache.cur_index_block_min_order_key = min_k;
+            }
+            if let Some(max_k) = last_key {
+                cache.cur_index_block_max_order_key = max_k;
+            }
             cache.cur_index_block_size_bytes = total_bytes;
             cache.cur_index_block_start_off = start_off;
             cache.cur_index_block_len_bytes = total_bytes;
         } else {
             // Extend indexed block
-            if let Some(max_k) = last_key { cache.cur_index_block_max_order_key = max_k; }
+            if let Some(max_k) = last_key {
+                cache.cur_index_block_max_order_key = max_k;
+            }
             cache.cur_index_block_size_bytes = cache.cur_index_block_size_bytes + total_bytes;
             cache.cur_index_block_start_off = start_off;
             cache.cur_index_block_len_bytes = total_bytes;
@@ -126,7 +143,9 @@ fn recover_tail_with_plugin_from_offset(chunk_path: &std::path::Path, start_off:
             let bytes = read_record_bytes(&mut f2, off, len)?;
             cache.cur_last_record_bytes = Some(bytes);
         }
-        if let Some(k) = last_key { cache.cur_chunk_max_order_key = cache.cur_chunk_max_order_key.max(k); }
+        if let Some(k) = last_key {
+            cache.cur_chunk_max_order_key = cache.cur_chunk_max_order_key.max(k);
+        }
     } else if no_index {
         cache.cur_index_block_start_off = start_off;
         cache.cur_index_block_len_bytes = total_bytes;
@@ -135,7 +154,7 @@ fn recover_tail_with_plugin_from_offset(chunk_path: &std::path::Path, start_off:
 }
 
 fn read_record_bytes(f: &mut (impl Read + Seek), offset: u64, len: u32) -> crate::errors::Result<Vec<u8>> {
-    use std::io::{SeekFrom};
+    use std::io::SeekFrom;
     let mut buf = vec![0u8; len as usize];
     f.seek(SeekFrom::Start(offset))?;
     f.read_exact(&mut buf)?;

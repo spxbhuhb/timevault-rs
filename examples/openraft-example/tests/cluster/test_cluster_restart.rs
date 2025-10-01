@@ -1,11 +1,11 @@
+use maplit::btreeset;
+use openraft_example::state::{DeviceStatus, ExampleEvent};
 use std::collections::HashMap;
 use std::time::Duration;
-use maplit::btreeset;
 use std::time::{SystemTime, UNIX_EPOCH};
-use openraft_example::state::{DeviceStatus, ExampleEvent};
 use uuid::Uuid;
 
-use example_test_utils::{allocate_node_addrs, client_for, init_tracing, set_panic_hook, shutdown_nodes, spawn_nodes, unique_test_root, get_addr, wait_for_leader, wait_for_snapshot};
+use example_test_utils::{allocate_node_addrs, client_for, get_addr, init_tracing, set_panic_hook, shutdown_nodes, spawn_nodes, unique_test_root, wait_for_leader, wait_for_snapshot};
 
 // wait_for_leader and wait_for_snapshot moved to example-test-utils
 
@@ -45,9 +45,19 @@ async fn test_cluster_restart() -> anyhow::Result<()> {
         let timestamp = base_timestamp + idx;
         let is_online = idx % 3 != 0;
         let event = if is_online {
-            ExampleEvent::DeviceOnline { event_id, device_id: device, timestamp, partition_id }
+            ExampleEvent::DeviceOnline {
+                event_id,
+                device_id: device,
+                timestamp,
+                partition_id,
+            }
         } else {
-            ExampleEvent::DeviceOffline { event_id, device_id: device, timestamp, partition_id }
+            ExampleEvent::DeviceOffline {
+                event_id,
+                device_id: device,
+                timestamp,
+                partition_id,
+            }
         };
         expected_statuses.insert(
             device,

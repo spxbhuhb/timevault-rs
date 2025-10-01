@@ -6,11 +6,13 @@ use fs2::FileExt;
 use tempfile::TempDir;
 
 use timevault::errors::TvError;
-use timevault::store::locks::acquire_store_lock;
 use timevault::store::Store;
 use timevault::store::StoreConfig;
+use timevault::store::locks::acquire_store_lock;
 
-fn lock_file_path(root: &PathBuf) -> PathBuf { root.join(".timevault.write.lock") }
+fn lock_file_path(root: &PathBuf) -> PathBuf {
+    root.join(".timevault.write.lock")
+}
 
 #[test]
 fn test_acquire_creates_file_and_writes_pid() {
@@ -42,7 +44,10 @@ fn test_acquire_fails_when_locked_by_other() {
 
     // Now our acquire should fail with AlreadyOpen
     let err = acquire_store_lock(&root).unwrap_err();
-    match err { TvError::AlreadyOpen => {}, other => panic!("expected AlreadyOpen, got {other:?}") }
+    match err {
+        TvError::AlreadyOpen => {}
+        other => panic!("expected AlreadyOpen, got {other:?}"),
+    }
 
     // Drop f at end of scope to release lock
 }
@@ -81,7 +86,10 @@ fn test_store_open_prevents_multiple_writers() {
         Ok(_) => panic!("expected AlreadyOpen error"),
         Err(err) => err,
     };
-    match err { TvError::AlreadyOpen => {}, other => panic!("expected AlreadyOpen, got {other:?}") }
+    match err {
+        TvError::AlreadyOpen => {}
+        other => panic!("expected AlreadyOpen, got {other:?}"),
+    }
 
     drop(store1);
 

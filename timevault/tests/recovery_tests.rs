@@ -5,12 +5,12 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 use uuid::Uuid;
 
+use timevault::PartitionHandle;
+use timevault::store::disk::index::IndexLine;
+use timevault::store::disk::manifest::ManifestLine;
 use timevault::store::partition::IndexCfg;
 use timevault::store::partition::recovery::load_partition_runtime_data;
 use timevault::store::paths;
-use timevault::store::disk::manifest::ManifestLine;
-use timevault::store::disk::index::IndexLine;
-use timevault::PartitionHandle;
 
 fn setup_partition(root: &PathBuf, id: Uuid) -> (PathBuf, PathBuf) {
     let part_dir = paths::partition_dir(root, id);
@@ -20,7 +20,9 @@ fn setup_partition(root: &PathBuf, id: Uuid) -> (PathBuf, PathBuf) {
     (part_dir, chunks_dir)
 }
 
-fn write_metadata(part_dir: &PathBuf, id: Uuid) { write_metadata_with_index_cfg(part_dir, id, Default::default()); }
+fn write_metadata(part_dir: &PathBuf, id: Uuid) {
+    write_metadata_with_index_cfg(part_dir, id, Default::default());
+}
 
 fn write_metadata_with_index_cfg(part_dir: &PathBuf, id: Uuid, index_cfg: IndexCfg) {
     use timevault::store::disk::metadata::MetadataJson;
@@ -100,12 +102,22 @@ fn recovery_missing_chunk_yields_error() {
 
     let chunk_id: u64 = 100;
     // Manifest references last chunk id, but we don't create the chunk file
-    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(200) });
+    write_manifest_line(
+        &manifest,
+        &ManifestLine {
+            chunk_id,
+            min_order_key: 100,
+            max_order_key: Some(200),
+        },
+    );
 
     let meta_path = paths::partition_metadata(&part_dir);
     let m = timevault::store::disk::metadata::load_metadata(&meta_path).unwrap();
     let err = load_partition_runtime_data(&root, id, &m).unwrap_err();
-    match err { timevault::errors::TvError::MissingFile { path } => assert_eq!(path, paths::chunk_file(&chunks_dir, chunk_id)), other => panic!("unexpected error: {other:?}") }
+    match err {
+        timevault::errors::TvError::MissingFile { path } => assert_eq!(path, paths::chunk_file(&chunks_dir, chunk_id)),
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
@@ -117,14 +129,24 @@ fn recovery_missing_index_yields_error() {
     let manifest = paths::partition_manifest(&part_dir);
 
     let chunk_id: u64 = 100;
-    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(300) });
+    write_manifest_line(
+        &manifest,
+        &ManifestLine {
+            chunk_id,
+            min_order_key: 100,
+            max_order_key: Some(300),
+        },
+    );
     // Create a chunk file but not index
     write_chunk(&chunks_dir, chunk_id, br#"{"timestamp":100}\n{"timestamp":200}\n"#.as_ref());
 
     let meta_path = paths::partition_metadata(&part_dir);
     let m = timevault::store::disk::metadata::load_metadata(&meta_path).unwrap();
     let err = load_partition_runtime_data(&root, id, &m).unwrap_err();
-    match err { timevault::errors::TvError::MissingFile { path } => assert_eq!(path, paths::index_file(&chunks_dir, chunk_id)), other => panic!("unexpected error: {other:?}") }
+    match err {
+        timevault::errors::TvError::MissingFile { path } => assert_eq!(path, paths::index_file(&chunks_dir, chunk_id)),
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
@@ -136,7 +158,14 @@ fn recovery_with_index_extends_block_and_reads_last_record() {
     let manifest = paths::partition_manifest(&part_dir);
 
     let chunk_id: u64 = 100;
-    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(400) });
+    write_manifest_line(
+        &manifest,
+        &ManifestLine {
+            chunk_id,
+            min_order_key: 100,
+            max_order_key: Some(400),
+        },
+    );
 
     // Build chunk: block (two records) then tail (one record)
     // Offsets: 0: {100}\n (9 bytes), 9: {200}\n (9 bytes), 18: {350}\n (9 bytes)
@@ -181,19 +210,35 @@ fn recovery_two_chunks_second_has_empty_index_initializes_runtime() {
     let chunk1: u64 = 1000;
     let rec1a = b"{\"timestamp\":1000}\n";
     let rec1b = b"{\"timestamp\":1001}\n";
-    let mut data1 = Vec::new(); data1.extend_from_slice(rec1a); data1.extend_from_slice(rec1b);
+    let mut data1 = Vec::new();
+    data1.extend_from_slice(rec1a);
+    data1.extend_from_slice(rec1b);
     write_chunk(&chunks_dir, chunk1, &data1);
     // Index: one block covering both
-    let idx1 = vec![idx_line(1000, 1001, 0, (rec1a.len()+rec1b.len()) as u64)];
+    let idx1 = vec![idx_line(
+        1000,
+        1001,
+        0,
+        (rec1a.len() + rec1b.len()) as u64,
+    )];
     write_index(&chunks_dir, chunk1, &idx1);
     // Closed line
-    write_manifest_line(&manifest, &ManifestLine { chunk_id: chunk1, min_order_key: 1000, max_order_key: Some(1001) });
+    write_manifest_line(
+        &manifest,
+        &ManifestLine {
+            chunk_id: chunk1,
+            min_order_key: 1000,
+            max_order_key: Some(1001),
+        },
+    );
 
     // Second chunk: open (no max), with an empty index file present
     let chunk2: u64 = 1002;
     let rec2a = b"{\"timestamp\":1002}\n";
     let rec2b = b"{\"timestamp\":1003}\n";
-    let mut data2 = Vec::new(); data2.extend_from_slice(rec2a); data2.extend_from_slice(rec2b);
+    let mut data2 = Vec::new();
+    data2.extend_from_slice(rec2a);
+    data2.extend_from_slice(rec2b);
     write_chunk(&chunks_dir, chunk2, &data2);
     // Touch empty index file for second chunk
     {
@@ -201,7 +246,14 @@ fn recovery_two_chunks_second_has_empty_index_initializes_runtime() {
         File::create(&ip).unwrap();
     }
     // Open manifest entry for second chunk
-    write_manifest_line(&manifest, &ManifestLine { chunk_id: chunk2, min_order_key: 1002, max_order_key: None });
+    write_manifest_line(
+        &manifest,
+        &ManifestLine {
+            chunk_id: chunk2,
+            min_order_key: 1002,
+            max_order_key: None,
+        },
+    );
 
     let meta_path = paths::partition_metadata(&part_dir);
     let m = timevault::store::disk::metadata::load_metadata(&meta_path).unwrap();
@@ -233,12 +285,22 @@ fn recovery_tail_flushes_with_expected_offset() {
     let manifest = paths::partition_manifest(&part_dir);
 
     let chunk_id: u64 = 100;
-    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(400) });
+    write_manifest_line(
+        &manifest,
+        &ManifestLine {
+            chunk_id,
+            min_order_key: 100,
+            max_order_key: Some(400),
+        },
+    );
 
     let rec1 = b"{\"timestamp\":100}\n";
     let rec2 = b"{\"timestamp\":200}\n";
     let tail = b"{\"timestamp\":350}\n";
-    let mut chunk = Vec::new(); chunk.extend_from_slice(rec1); chunk.extend_from_slice(rec2); chunk.extend_from_slice(tail);
+    let mut chunk = Vec::new();
+    chunk.extend_from_slice(rec1);
+    chunk.extend_from_slice(rec2);
+    chunk.extend_from_slice(tail);
     write_chunk(&chunks_dir, chunk_id, &chunk);
 
     let block_len = (rec1.len() + rec2.len()) as u64;
@@ -273,7 +335,14 @@ fn recovery_seek_to_misaligned_offset_errors() {
     let manifest = paths::partition_manifest(&part_dir);
 
     let chunk_id: u64 = 100;
-    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(400) });
+    write_manifest_line(
+        &manifest,
+        &ManifestLine {
+            chunk_id,
+            min_order_key: 100,
+            max_order_key: Some(400),
+        },
+    );
 
     // Create chunk with two valid JSONL records
     let rec1 = b"{\"timestamp\":100}\n";

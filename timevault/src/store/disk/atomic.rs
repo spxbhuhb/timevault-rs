@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::{Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::errors::Result;
@@ -21,8 +21,12 @@ fn write_json(path: &Path, val: &impl serde::Serialize) -> Result<()> {
     Ok(())
 }
 
-fn fsync_file(path: &Path) -> Result<()> { Ok(File::open(path)?.sync_all()?) }
-fn fsync_dir(path: &Path) -> Result<()> { Ok(File::open(path)?.sync_all()?) }
+fn fsync_file(path: &Path) -> Result<()> {
+    Ok(File::open(path)?.sync_all()?)
+}
+fn fsync_dir(path: &Path) -> Result<()> {
+    Ok(File::open(path)?.sync_all()?)
+}
 
 fn tmp_path(path: &Path) -> PathBuf {
     let mut p = path.to_path_buf();

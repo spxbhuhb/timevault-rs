@@ -23,8 +23,7 @@ pub async fn read(app: Data<App>) -> actix_web::Result<impl Responder> {
 
 #[get("/partitions")]
 pub async fn partitions(app: Data<App>) -> actix_web::Result<impl Responder> {
-    let ids = timevault::store::paths::list_partitions(&app.root)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let ids = timevault::store::paths::list_partitions(&app.root).map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(Json(Ok::<_, crate::typ::RaftError>(ids)))
 }
 

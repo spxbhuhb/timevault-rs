@@ -4,11 +4,11 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 use uuid::Uuid;
 
-use timevault::store::paths;
-use timevault::{PartitionHandle};
+use timevault::PartitionHandle;
 use timevault::errors::TvError;
-use timevault::store::disk::manifest::ManifestLine;
 use timevault::store::disk::index::IndexLine;
+use timevault::store::disk::manifest::ManifestLine;
+use timevault::store::paths;
 
 fn setup_partition(root: &PathBuf) -> (PartitionHandle, PathBuf, PathBuf) {
     let pid = Uuid::now_v7();
@@ -78,7 +78,10 @@ fn test_invalid_range_returns_error() {
     let root = td.path().to_path_buf();
     let (h, _part_dir, _chunks_dir) = setup_partition(&root);
     let err = h.read_range(10, 5).unwrap_err();
-    match err { TvError::InvalidRange { .. } => {}, _ => panic!("wrong error: {err:?}") }
+    match err {
+        TvError::InvalidRange { .. } => {}
+        _ => panic!("wrong error: {err:?}"),
+    }
 }
 
 #[test]
@@ -89,7 +92,10 @@ fn test_missing_manifest_returns_error() {
     let manifest = paths::partition_manifest(&part_dir);
     assert!(!manifest.exists());
     let err = h.read_range(0, 100).unwrap_err();
-    match err { TvError::MissingFile { path } => assert_eq!(path, manifest), _ => panic!("wrong error: {err:?}") }
+    match err {
+        TvError::MissingFile { path } => assert_eq!(path, manifest),
+        _ => panic!("wrong error: {err:?}"),
+    }
 }
 
 #[test]
@@ -101,13 +107,20 @@ fn test_missing_chunk_returns_error() {
     let manifest = paths::partition_manifest(&part_dir);
     // manifest references a chunk id but no file created
     let chunk_id: u64 = 100;
-    let m = ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(200) };
+    let m = ManifestLine {
+        chunk_id,
+        min_order_key: 100,
+        max_order_key: Some(200),
+    };
     write_manifest_line(&manifest, &m);
 
     let err = h.read_range(0, 300).unwrap_err();
-    match err { TvError::MissingFile { path } => {
-        assert_eq!(path, paths::chunk_file(&chunks_dir, chunk_id));
-    }, _ => panic!("wrong error: {err:?}") }
+    match err {
+        TvError::MissingFile { path } => {
+            assert_eq!(path, paths::chunk_file(&chunks_dir, chunk_id));
+        }
+        _ => panic!("wrong error: {err:?}"),
+    }
 }
 
 #[test]
@@ -119,16 +132,26 @@ fn test_missing_index_returns_error_for_partial_read() {
     let manifest = paths::partition_manifest(&part_dir);
     let chunk_id: u64 = 100;
     // Rolled chunk [100, 300]
-    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(300) });
+    write_manifest_line(
+        &manifest,
+        &ManifestLine {
+            chunk_id,
+            min_order_key: 100,
+            max_order_key: Some(300),
+        },
+    );
 
     // Create chunk data
     write_chunk(&chunks_dir, chunk_id, b"ABCDEFGH");
 
     // Request [150, 250] which is a strict subset -> not fully covered, should use index and fail
     let err = h.read_range(150, 250).unwrap_err();
-    match err { TvError::MissingFile { path } => {
-        assert_eq!(path, paths::index_file(&chunks_dir, chunk_id));
-    }, _ => panic!("wrong error: {err:?}") }
+    match err {
+        TvError::MissingFile { path } => {
+            assert_eq!(path, paths::index_file(&chunks_dir, chunk_id));
+        }
+        _ => panic!("wrong error: {err:?}"),
+    }
 }
 
 #[test]
@@ -140,7 +163,14 @@ fn test_whole_chunk_fast_path_reads_entire_file() {
     let manifest = paths::partition_manifest(&part_dir);
     let chunk_id: u64 = 100;
     // Rolled chunk fully inside range [100, 300]
-    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(300) });
+    write_manifest_line(
+        &manifest,
+        &ManifestLine {
+            chunk_id,
+            min_order_key: 100,
+            max_order_key: Some(300),
+        },
+    );
 
     // Chunk content
     let data = b"0123456789";
@@ -159,11 +189,18 @@ fn test_indexed_selection_reads_expected_ranges() {
 
     let manifest = paths::partition_manifest(&part_dir);
     let chunk_id: u64 = 100;
-    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(500) });
+    write_manifest_line(
+        &manifest,
+        &ManifestLine {
+            chunk_id,
+            min_order_key: 100,
+            max_order_key: Some(500),
+        },
+    );
 
     // Build a chunk with 3 blocks: A(0..3), B(3..6), C(6..9)
     // Use bytes to simulate blocks at offsets with lengths
-    // We'll map timestamps per index lines: 
+    // We'll map timestamps per index lines:
     //  Block1: [100, 199] at offset 0 len 3 => b"AAA"
     //  Block2: [200, 299] at offset 3 len 3 => b"BBB"
     //  Block3: [300, 399] at offset 6 len 3 => b"CCC"
@@ -198,7 +235,14 @@ fn test_range_outside_returns_empty() {
 
     let manifest = paths::partition_manifest(&part_dir);
     let chunk_id: u64 = 100;
-    write_manifest_line(&manifest, &ManifestLine { chunk_id, min_order_key: 100, max_order_key: Some(200) });
+    write_manifest_line(
+        &manifest,
+        &ManifestLine {
+            chunk_id,
+            min_order_key: 100,
+            max_order_key: Some(200),
+        },
+    );
     write_chunk(&chunks_dir, chunk_id, b"XYZ");
 
     let out1 = h.read_range(0, 50).unwrap();
@@ -216,8 +260,22 @@ fn test_cross_chunk_reads_concatenate() {
     let manifest = paths::partition_manifest(&part_dir);
     let c1: u64 = 0;
     let c2: u64 = 50;
-    write_manifest_line(&manifest, &ManifestLine { chunk_id: c1, min_order_key: 0, max_order_key: Some(49) });
-    write_manifest_line(&manifest, &ManifestLine { chunk_id: c2, min_order_key: 50, max_order_key: Some(99) });
+    write_manifest_line(
+        &manifest,
+        &ManifestLine {
+            chunk_id: c1,
+            min_order_key: 0,
+            max_order_key: Some(49),
+        },
+    );
+    write_manifest_line(
+        &manifest,
+        &ManifestLine {
+            chunk_id: c2,
+            min_order_key: 50,
+            max_order_key: Some(99),
+        },
+    );
     write_chunk(&chunks_dir, c1, b"AAAA");
     write_chunk(&chunks_dir, c2, b"BBBB");
 

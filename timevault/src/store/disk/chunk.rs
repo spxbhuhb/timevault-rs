@@ -9,7 +9,9 @@ pub fn open_chunk_append(path: &Path) -> Result<File> {
     Ok(f)
 }
 
-pub fn file_len(f: &File) -> Result<u64> { Ok(f.metadata()?.len()) }
+pub fn file_len(f: &File) -> Result<u64> {
+    Ok(f.metadata()?.len())
+}
 
 pub fn append_all(f: &mut File, buf: &[u8]) -> Result<u64> {
     let off = f.seek(SeekFrom::End(0))?;

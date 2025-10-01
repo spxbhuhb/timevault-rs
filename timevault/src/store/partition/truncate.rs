@@ -1,20 +1,21 @@
 use std::fs::File;
 
-
-use crate::store::disk::index::{load_index_lines, IndexLine};
-use crate::store::disk::manifest::{load_manifest, ManifestLine};
 use crate::errors::{Result, TvError};
-use crate::store::partition::misc;
+use crate::store::disk::index::{IndexLine, load_index_lines};
+use crate::store::disk::manifest::{ManifestLine, load_manifest};
 use crate::store::partition::PartitionHandle;
-use crate::store::plugins::FormatPlugin;
+use crate::store::partition::misc;
 use crate::store::paths;
+use crate::store::plugins::FormatPlugin;
 
 pub fn truncate(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
     misc::ensure_writable(h)?;
     let p = misc::paths_for(h)?;
 
     let manifest = load_manifest(&p.manifest_path)?;
-    if manifest.is_empty() { return Ok(()); }
+    if manifest.is_empty() {
+        return Ok(());
+    }
 
     // Load metadata and plugin for potential scanning
     let (meta, plugin) = misc::load_meta_and_plugin(&p.part_dir)?;
@@ -72,15 +73,11 @@ pub fn truncate(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
     Ok(())
 }
 
-fn truncate_chunk_and_index(
-    chunks_dir: &std::path::Path,
-    chunk_id: u64,
-    cutoff_key: u64,
-    was_closed_max: Option<u64>,
-    plugin: &dyn FormatPlugin,
-) -> Result<(bool, Option<u64>)> {
+fn truncate_chunk_and_index(chunks_dir: &std::path::Path, chunk_id: u64, cutoff_key: u64, was_closed_max: Option<u64>, plugin: &dyn FormatPlugin) -> Result<(bool, Option<u64>)> {
     let chunk_path = paths::chunk_file(chunks_dir, chunk_id);
-    if !chunk_path.exists() { return Err(TvError::MissingFile { path: chunk_path }); }
+    if !chunk_path.exists() {
+        return Err(TvError::MissingFile { path: chunk_path });
+    }
     let index_path = paths::index_file(chunks_dir, chunk_id);
 
     // Load existing index lines if present
@@ -114,8 +111,12 @@ fn truncate_chunk_and_index(
         let mut last_kept_end: u64 = base_end_off;
         let mut last_kept_key: Option<u64> = new_max_key; // continue max from index if any
         while let Some(m) = scanner.next()? {
-            if (m.ts_ms as u64) >= cutoff_key { break; }
-            if first_kept_key.is_none() { first_kept_key = Some(m.ts_ms as u64); }
+            if (m.ts_ms as u64) >= cutoff_key {
+                break;
+            }
+            if first_kept_key.is_none() {
+                first_kept_key = Some(m.ts_ms as u64);
+            }
             last_kept_end = m.offset + m.len as u64;
             last_kept_key = Some(m.ts_ms as u64);
         }
@@ -136,9 +137,15 @@ fn truncate_chunk_and_index(
                 let mut last_kept_end = overlap.file_offset_bytes;
                 let mut last_kept_key = new_max_key; // continues from previous blocks
                 while let Some(m) = scanner.next()? {
-                    if (m.offset as u64) >= overlap.file_offset_bytes + overlap.block_len_bytes { break; }
-                    if (m.ts_ms as u64) >= cutoff_key { break; }
-                    if first_kept_key.is_none() { first_kept_key = Some(m.ts_ms as u64); }
+                    if (m.offset as u64) >= overlap.file_offset_bytes + overlap.block_len_bytes {
+                        break;
+                    }
+                    if (m.ts_ms as u64) >= cutoff_key {
+                        break;
+                    }
+                    if first_kept_key.is_none() {
+                        first_kept_key = Some(m.ts_ms as u64);
+                    }
                     last_kept_end = m.offset + m.len as u64;
                     last_kept_key = Some(m.ts_ms as u64);
                 }
@@ -163,7 +170,9 @@ fn truncate_chunk_and_index(
             let mut last_kept_end: u64 = 0;
             let mut last_kept_key: Option<u64> = None;
             while let Some(m) = scanner.next()? {
-                if (m.ts_ms as u64) >= cutoff_key { break; }
+                if (m.ts_ms as u64) >= cutoff_key {
+                    break;
+                }
                 last_kept_end = m.offset + m.len as u64;
                 last_kept_key = Some(m.ts_ms as u64);
             }
@@ -192,4 +201,3 @@ fn truncate_chunk_and_index(
 
     Ok((true, new_max_key))
 }
-

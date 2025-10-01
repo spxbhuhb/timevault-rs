@@ -2,10 +2,10 @@ use std::fs;
 use tempfile::TempDir;
 use uuid::Uuid;
 
-use timevault::store::paths;
 use timevault::PartitionHandle;
 use timevault::store::disk::manifest::ManifestLine;
 use timevault::store::partition::{ChunkRollCfg, IndexCfg, RetentionCfg};
+use timevault::store::paths;
 
 fn enc(ts: i64, value: serde_json::Value) -> Vec<u8> {
     let rec = serde_json::json!({"timestamp": ts, "payload": value});
@@ -21,7 +21,10 @@ fn write_metadata(part_dir: &std::path::Path, id: Uuid, roll_max_bytes: u64, ind
         format_version: 1,
         format_plugin: "jsonl".to_string(),
         chunk_roll: ChunkRollCfg { max_bytes: roll_max_bytes, max_hours: 0 },
-        index: IndexCfg { max_records: index_max_records, max_hours: 0 },
+        index: IndexCfg {
+            max_records: index_max_records,
+            max_hours: 0,
+        },
         retention: RetentionCfg::default(),
         key_is_timestamp: true,
         logical_purge: false,
@@ -51,7 +54,9 @@ fn truncate_noop_when_cutoff_after_tail() {
     write_metadata(&part_dir, id, u64::MAX, 100);
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
-    for i in 1..=5 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+    for i in 1..=5 {
+        h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap();
+    }
     let manifest_path = paths::partition_manifest(&part_dir);
     let before = read_manifest_lines(&manifest_path);
 
@@ -74,7 +79,9 @@ fn truncate_inside_open_chunk() {
     write_metadata(&part_dir, id, u64::MAX, 2);
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
-    for i in 1..=5 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+    for i in 1..=5 {
+        h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap();
+    }
     // Truncate from 4 inclusive → keep 1,2,3
     h.truncate(4).unwrap();
     let data = h.read_range(1, 100).unwrap();
@@ -93,7 +100,9 @@ fn truncate_removes_newer_chunks() {
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
     // Append multiple records to produce >=2 chunks
-    for i in 1..=20 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+    for i in 1..=20 {
+        h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap();
+    }
     let manifest_path = paths::partition_manifest(&part_dir);
     let before = read_manifest_lines(&manifest_path);
     assert!(before.len() >= 2);
@@ -116,7 +125,9 @@ fn truncate_to_empty_partition() {
     write_metadata(&part_dir, id, u64::MAX, 100);
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
-    for i in 10..=12 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+    for i in 10..=12 {
+        h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap();
+    }
     h.truncate(1).unwrap(); // cutoff before earliest
 
     let manifest_path = paths::partition_manifest(&part_dir);
@@ -139,7 +150,9 @@ fn truncate_inside_closed_chunk_drops_partial_block() {
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
     // First chunk will have records 1-5, second chunk record 6
-    for i in 1..=6 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+    for i in 1..=6 {
+        h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap();
+    }
 
     // Cut inside the closed first chunk at key 4. Previously, record 3 (<4) was dropped
     // because it shared an index block with record 4. Now it must be preserved.
@@ -158,7 +171,9 @@ fn truncate_idempotent() {
     write_metadata(&part_dir, id, u64::MAX, 2);
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
-    for i in 1..=5 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+    for i in 1..=5 {
+        h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap();
+    }
 
     let manifest_path = paths::partition_manifest(&part_dir);
     h.truncate(4).unwrap();
@@ -181,7 +196,9 @@ fn truncate_open_chunk_without_index() {
     write_metadata(&part_dir, id, u64::MAX, 100);
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
-    for i in 1..=5 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+    for i in 1..=5 {
+        h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap();
+    }
     h.truncate(4).unwrap();
     let data = h.read_range(1, 100).unwrap();
     assert_eq!(count_lines(&data), 3);
@@ -199,7 +216,9 @@ fn truncate_inside_open_chunk_with_preceding_closed_chunk() {
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
     // Records 1-5 in first closed chunk, 6-10 in second open chunk
-    for i in 1..=10 { h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap(); }
+    for i in 1..=10 {
+        h.append(i, &enc(i as i64, serde_json::json!(i))).unwrap();
+    }
 
     // Truncate inside the second (open) chunk at key 8 -> keep 1..7
     h.truncate(8).unwrap();

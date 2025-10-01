@@ -17,7 +17,9 @@ pub fn load_index_lines(file: &File) -> Result<Vec<IndexLine>> {
     let mut out = Vec::new();
     for line in reader.lines() {
         let l = line?;
-        if l.trim().is_empty() { continue; }
+        if l.trim().is_empty() {
+            continue;
+        }
         let idx = serde_json::from_str::<IndexLine>(&l)?;
         out.push(idx);
     }
@@ -33,7 +35,9 @@ pub fn create_empty_index_file(rt: &crate::store::partition::PartitionRuntime, c
     let mut f = OpenOptions::new().create(true).write(true).open(&ip)?;
     f.flush()?;
     let _ = f.sync_all();
-    if let Some(dir) = ip.parent() { let _ = crate::store::fsync::fsync_dir(dir); }
+    if let Some(dir) = ip.parent() {
+        let _ = crate::store::fsync::fsync_dir(dir);
+    }
     Ok(())
 }
 
@@ -43,11 +47,16 @@ pub fn rewrite_index_atomic(path: &std::path::Path, lines: &[IndexLine]) -> Resu
     {
         let mut f = OpenOptions::new().create(true).truncate(true).write(true).open(&tmp)?;
         for l in lines {
-            let mut buf = serde_json::to_vec(l)?; buf.push(b'\n'); f.write_all(&buf)?;
+            let mut buf = serde_json::to_vec(l)?;
+            buf.push(b'\n');
+            f.write_all(&buf)?;
         }
-        f.flush()?; let _ = f.sync_all();
+        f.flush()?;
+        let _ = f.sync_all();
     }
     std::fs::rename(&tmp, path)?;
-    if let Some(dir) = path.parent() { let _ = crate::store::fsync::fsync_dir(dir); }
+    if let Some(dir) = path.parent() {
+        let _ = crate::store::fsync::fsync_dir(dir);
+    }
     Ok(())
 }

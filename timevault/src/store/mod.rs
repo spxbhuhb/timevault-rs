@@ -1,22 +1,22 @@
-pub mod paths;
-pub mod locks;
-pub mod fsync;
-pub mod disk;
-pub mod partition;
-pub mod plugins;
 pub mod admin;
+pub mod disk;
+pub mod fsync;
+pub mod locks;
+pub mod partition;
+pub mod paths;
+pub mod plugins;
 pub mod snapshot;
 pub mod transfer;
 
 use crate::errors::Result;
-use partition::PartitionHandle;
+use crate::store::disk::metadata::MetadataJson;
+use crate::store::partition::PartitionConfig;
 use parking_lot::RwLock;
+use partition::PartitionHandle;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
-use serde::{Deserialize, Serialize};
-use crate::store::disk::metadata::MetadataJson;
-use crate::store::partition::PartitionConfig;
 
 #[derive(Debug)]
 pub struct Store {
@@ -31,27 +31,40 @@ impl Store {
         let root = root.to_path_buf();
         std::fs::create_dir_all(paths::partitions_root(&root))?;
         let _store_lock = if cfg.read_only { None } else { Some(locks::acquire_store_lock(&root)?) };
-        Ok(Store { root, cfg, partitions: RwLock::new(HashMap::new()), _store_lock })
+        Ok(Store {
+            root,
+            cfg,
+            partitions: RwLock::new(HashMap::new()),
+            _store_lock,
+        })
     }
 
     pub fn open_partition(&self, partition: Uuid) -> Result<PartitionHandle> {
         let mut map = self.partitions.write();
-        if let Some(h) = map.get(&partition) { return Ok(h.clone()); }
+        if let Some(h) = map.get(&partition) {
+            return Ok(h.clone());
+        }
         let handle = PartitionHandle::open_with_opts(self.root.clone(), partition, self.cfg.read_only)?;
         map.insert(partition, handle.clone());
         Ok(handle)
     }
 
-    pub fn list_partitions(&self) -> Result<Vec<Uuid>> { paths::list_partitions(&self.root) }
+    pub fn list_partitions(&self) -> Result<Vec<Uuid>> {
+        paths::list_partitions(&self.root)
+    }
 
-    pub fn root_path(&self) -> &Path { &self.root }
+    pub fn root_path(&self) -> &Path {
+        &self.root
+    }
 
     pub fn ensure_partition(&self, metadata: &MetadataJson) -> Result<PartitionHandle> {
         match self.open_partition(metadata.partition_id) {
             Ok(handle) => Ok(handle),
             Err(err) => match err {
                 crate::errors::TvError::MissingFile { .. } | crate::errors::TvError::PartitionNotFound(_) => {
-                    if self.cfg.read_only { return Err(crate::errors::TvError::ReadOnly); }
+                    if self.cfg.read_only {
+                        return Err(crate::errors::TvError::ReadOnly);
+                    }
                     let cfg = partition_config_from_metadata(metadata);
                     let handle = PartitionHandle::create(self.root.clone(), metadata.partition_id, cfg)?;
                     self.partitions.write().insert(metadata.partition_id, handle.clone());
@@ -69,7 +82,9 @@ pub struct StoreConfig {
 }
 
 impl Default for StoreConfig {
-    fn default() -> Self { Self { read_only: false } }
+    fn default() -> Self {
+        Self { read_only: false }
+    }
 }
 
 fn partition_config_from_metadata(meta: &MetadataJson) -> PartitionConfig {

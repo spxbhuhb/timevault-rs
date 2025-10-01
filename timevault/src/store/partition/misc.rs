@@ -6,7 +6,9 @@ use crate::errors::{Result, TvError};
 use crate::store::partition::PartitionHandle;
 
 pub(crate) fn ensure_writable(h: &PartitionHandle) -> Result<()> {
-    if h.inner.read_only { return Err(TvError::ReadOnly); }
+    if h.inner.read_only {
+        return Err(TvError::ReadOnly);
+    }
     Ok(())
 }
 
@@ -20,7 +22,9 @@ pub(crate) fn paths_for(h: &PartitionHandle) -> Result<Paths> {
     let part_dir = crate::store::paths::partition_dir(h.root(), h.id());
     let chunks_dir = crate::store::paths::chunks_dir(&part_dir);
     let manifest_path = crate::store::paths::partition_manifest(&part_dir);
-    if !manifest_path.exists() { return Err(TvError::MissingFile { path: manifest_path }); }
+    if !manifest_path.exists() {
+        return Err(TvError::MissingFile { path: manifest_path });
+    }
     Ok(Paths { part_dir, chunks_dir, manifest_path })
 }
 

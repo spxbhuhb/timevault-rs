@@ -170,7 +170,11 @@ fn install_snapshot_handles_single_chunk_partition() {
     let metadata = default_metadata(partition_id);
 
     let chunk_id = 1;
-    let manifest_lines = vec![ManifestLine { chunk_id, min_order_key: 10, max_order_key: None }];
+    let manifest_lines = vec![ManifestLine {
+        chunk_id,
+        min_order_key: 10,
+        max_order_key: None,
+    }];
     let chunk_data = b"abcdef".to_vec();
     let target_len = chunk_data.len() as u64;
     let index_lines = vec![
@@ -208,11 +212,7 @@ fn install_snapshot_handles_single_chunk_partition() {
     let part_dir = paths::partition_dir(store.root_path(), partition_id);
     let manifest_path = paths::partition_manifest(&part_dir);
     let manifest_text = fs::read_to_string(&manifest_path).unwrap();
-    let applied_manifest: Vec<ManifestLine> = manifest_text
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
+    let applied_manifest: Vec<ManifestLine> = manifest_text.lines().filter(|l| !l.is_empty()).map(|line| serde_json::from_str(line).unwrap()).collect();
     assert_eq!(applied_manifest.len(), 1);
     assert_eq!(applied_manifest[0].chunk_id, chunk_id);
     assert_eq!(applied_manifest[0].min_order_key, 10);
@@ -224,11 +224,7 @@ fn install_snapshot_handles_single_chunk_partition() {
 
     let index_path = paths::index_file(&chunks_dir, chunk_id);
     let index_text = fs::read_to_string(&index_path).unwrap();
-    let applied_index: Vec<IndexLine> = index_text
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
+    let applied_index: Vec<IndexLine> = index_text.lines().filter(|l| !l.is_empty()).map(|line| serde_json::from_str(line).unwrap()).collect();
     assert_eq!(applied_index.len(), index_lines.len());
     for (applied, expected) in applied_index.iter().zip(index_lines.iter()) {
         assert_eq!(applied.block_min_key, expected.block_min_key);
@@ -248,7 +244,11 @@ fn install_snapshot_handles_open_chunk_without_last_order_key() {
     let metadata = default_metadata(partition_id);
 
     let chunk_id = 3;
-    let manifest_lines = vec![ManifestLine { chunk_id, min_order_key: 50, max_order_key: None }];
+    let manifest_lines = vec![ManifestLine {
+        chunk_id,
+        min_order_key: 50,
+        max_order_key: None,
+    }];
     let chunk_data = b"abcdefgh".to_vec();
     let target_len = 3u64;
     let index_lines = vec![
@@ -286,11 +286,7 @@ fn install_snapshot_handles_open_chunk_without_last_order_key() {
     let part_dir = paths::partition_dir(store.root_path(), partition_id);
     let manifest_path = paths::partition_manifest(&part_dir);
     let manifest_text = fs::read_to_string(&manifest_path).unwrap();
-    let applied_manifest: Vec<ManifestLine> = manifest_text
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
+    let applied_manifest: Vec<ManifestLine> = manifest_text.lines().filter(|l| !l.is_empty()).map(|line| serde_json::from_str(line).unwrap()).collect();
     assert_eq!(applied_manifest.len(), 1);
     assert_eq!(applied_manifest[0].chunk_id, chunk_id);
     assert_eq!(applied_manifest[0].min_order_key, 50);
@@ -302,11 +298,7 @@ fn install_snapshot_handles_open_chunk_without_last_order_key() {
 
     let index_path = paths::index_file(&chunks_dir, chunk_id);
     let index_text = fs::read_to_string(&index_path).unwrap();
-    let applied_index: Vec<IndexLine> = index_text
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
+    let applied_index: Vec<IndexLine> = index_text.lines().filter(|l| !l.is_empty()).map(|line| serde_json::from_str(line).unwrap()).collect();
     assert_eq!(applied_index.len(), 1);
     assert_eq!(applied_index[0].block_min_key, index_lines[0].block_min_key);
     assert_eq!(applied_index[0].block_max_key, index_lines[0].block_max_key);

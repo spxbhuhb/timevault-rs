@@ -6,7 +6,9 @@ use std::io::{self, BufRead, BufReader, SeekFrom};
 pub struct JsonlStructPlugin;
 
 impl FormatPlugin for JsonlStructPlugin {
-    fn id(&self) -> &'static str { "jsonl_struct" }
+    fn id(&self) -> &'static str {
+        "jsonl_struct"
+    }
 
     fn scanner<'a>(&self, file: &'a mut dyn ReadSeek) -> io::Result<Box<dyn ChunkScanner + 'a>> {
         Ok(Box::new(JsonlStructScanner::new(file)))
@@ -37,15 +39,23 @@ impl<'a> JsonlStructScanner<'a> {
 impl<'a> ChunkScanner for JsonlStructScanner<'a> {
     fn next(&mut self) -> io::Result<Option<RecordMeta>> {
         let buf = self.reader.fill_buf()?;
-        if buf.is_empty() { return Ok(None); }
-        let line_end = match memchr::memchr(b'\n', buf) { Some(i) => i, None => buf.len() };
+        if buf.is_empty() {
+            return Ok(None);
+        }
+        let line_end = match memchr::memchr(b'\n', buf) {
+            Some(i) => i,
+            None => buf.len(),
+        };
         let line = &buf[..line_end];
         let json = std::str::from_utf8(line).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid utf8 in jsonl"))?;
-        let Rec { timestamp } = serde_json::from_str::<Rec>(json)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "json"))?;
+        let Rec { timestamp } = serde_json::from_str::<Rec>(json).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "json"))?;
         let rec_len = line_end as u32 + 1;
         self.reader.consume(line_end + 1);
-        let meta = RecordMeta { offset: self.pos, len: rec_len, ts_ms: timestamp };
+        let meta = RecordMeta {
+            offset: self.pos,
+            len: rec_len,
+            ts_ms: timestamp,
+        };
         self.pos += rec_len as u64;
         Ok(Some(meta))
     }
@@ -54,9 +64,11 @@ impl<'a> ChunkScanner for JsonlStructScanner<'a> {
         use std::io::{Read, Seek, SeekFrom};
         self.reader.seek(SeekFrom::Start(offset))?;
         self.pos = offset;
-        if offset == 0 { return Ok(()); }
+        if offset == 0 {
+            return Ok(());
+        }
         self.reader.seek(SeekFrom::Start(offset - 1))?;
-        let mut b = [0u8;1];
+        let mut b = [0u8; 1];
         let n = self.reader.read(&mut b)?;
         let prev_is_nl = n == 1 && b[0] == b'\n';
         if !prev_is_nl {
@@ -67,4 +79,6 @@ impl<'a> ChunkScanner for JsonlStructScanner<'a> {
 }
 
 #[derive(Deserialize)]
-struct Rec { timestamp: i64 }
+struct Rec {
+    timestamp: i64,
+}

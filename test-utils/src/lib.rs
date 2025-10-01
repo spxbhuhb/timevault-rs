@@ -54,8 +54,7 @@ fn workspace_root() -> PathBuf {
         // Heuristics for the repo/workspace root:
         // - Usually contains Cargo.lock (after first build) or .git
         // - And is the place where /target sits for a workspace
-        let looks_like_root =
-            p.join("Cargo.lock").exists() || p.join(".git").is_dir() || p.join(".git").is_file();
+        let looks_like_root = p.join("Cargo.lock").exists() || p.join(".git").is_dir() || p.join(".git").is_file();
 
         if looks_like_root {
             return p;

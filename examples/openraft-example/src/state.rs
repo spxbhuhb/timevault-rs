@@ -1,19 +1,19 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::network::transfer::StoreTransferClient;
 use openraft::storage::{RaftStateMachine, Snapshot};
 use openraft::{AnyError, Entry, EntryPayload, ErrorSubject, ErrorVerb, LogId, OptionalSend, RaftSnapshotBuilder, SnapshotMeta, StorageError, StorageIOError, StoredMembership};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use timevault::PartitionHandle;
 use timevault::raft::state::{SnapshotData, StateMachineData, StoredSnapshot};
-use timevault::store::disk::metadata::MetadataJson;
-use timevault::store::snapshot::{build_store_snapshot_all, ensure_partitions_from_snapshot, install_store_snapshot, StoreSnapshot};
-use crate::network::transfer::StoreTransferClient;
-use timevault::store::{Store, StoreConfig};
-use timevault::store::partition::PartitionConfig;
 use timevault::raft::{TvrNode, TvrNodeId};
 use timevault::store::disk::atomic::atomic_write_json;
+use timevault::store::disk::metadata::MetadataJson;
+use timevault::store::partition::PartitionConfig;
+use timevault::store::snapshot::{StoreSnapshot, build_store_snapshot_all, ensure_partitions_from_snapshot, install_store_snapshot};
+use timevault::store::{Store, StoreConfig};
 use uuid::Uuid;
 
 use crate::ExampleConfig;
@@ -205,10 +205,12 @@ impl RaftSnapshotBuilder<ExampleConfig> for ExampleSnapshotBuilder {
             devices: self.devices.read().clone(),
             store: Some(self.store_snapshot.clone()),
         };
-        let data = serde_json::to_vec(&snapshot_state)
-            .map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
+        let data = serde_json::to_vec(&snapshot_state).map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
 
-        Ok(Snapshot { meta, snapshot: Box::new(std::io::Cursor::new(data)) })
+        Ok(Snapshot {
+            meta,
+            snapshot: Box::new(std::io::Cursor::new(data)),
+        })
     }
 }
 
@@ -275,25 +277,18 @@ impl RaftStateMachine<ExampleConfig> for ExampleStateMachine {
         // If snapshot includes a store snapshot, ensure local partitions exist and install data from leader.
         if let Ok(state) = serde_json::from_slice::<SnapshotState>(&new_snapshot.data) {
             if let Some(store) = state.store {
-                let store_handle = Store::open(self.store.root_path(), StoreConfig { read_only: false })
-                    .map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
-                ensure_partitions_from_snapshot(&store_handle, &store)
-                    .map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
+                let store_handle = Store::open(self.store.root_path(), StoreConfig { read_only: false }).map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
+                ensure_partitions_from_snapshot(&store_handle, &store).map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
                 // Perform full Option D: install store snapshot by downloading from leader.
                 if let Some(last) = meta.last_log_id {
                     let leader_id = last.leader_id.node_id;
                     // Try to resolve leader address from last_membership
-                    let leader_addr = meta
-                        .last_membership
-                        .membership()
-                        .get_node(&leader_id)
-                        .map(|n| n.addr.clone());
+                    let leader_addr = meta.last_membership.membership().get_node(&leader_id).map(|n| n.addr.clone());
                     if let Some(addr) = leader_addr {
                         let base = format!("http://{}", addr);
                         let transfer = StoreTransferClient::new(base);
                         // Best-effort install; map errors to StorageError
-                        install_store_snapshot(&store_handle, &transfer, &store)
-                            .map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
+                        install_store_snapshot(&store_handle, &transfer, &store).map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
                     } else {
                         tracing::warn!(leader_id, "could not resolve leader address for snapshot install");
                     }

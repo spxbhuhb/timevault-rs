@@ -2,12 +2,12 @@ use std::fs;
 use tempfile::TempDir;
 use uuid::Uuid;
 
-use timevault::store::paths;
 use timevault::PartitionHandle;
 use timevault::errors::TvError;
-use timevault::store::disk::manifest::ManifestLine;
 use timevault::store::disk::index::load_index_lines;
+use timevault::store::disk::manifest::ManifestLine;
 use timevault::store::partition::{ChunkRollCfg, IndexCfg, RetentionCfg};
+use timevault::store::paths;
 
 fn enc(ts: i64, value: serde_json::Value) -> Vec<u8> {
     let rec = serde_json::json!({"timestamp": ts, "payload": value});
@@ -23,7 +23,10 @@ fn write_metadata(part_dir: &std::path::Path, id: Uuid, index_max_records: u32) 
         format_version: 1,
         format_plugin: "jsonl".to_string(),
         chunk_roll: ChunkRollCfg { max_bytes: u64::MAX, max_hours: 0 },
-        index: IndexCfg { max_records: index_max_records, max_hours: 0 },
+        index: IndexCfg {
+            max_records: index_max_records,
+            max_hours: 0,
+        },
         retention: RetentionCfg::default(),
         key_is_timestamp: true,
         logical_purge: false,
@@ -50,7 +53,10 @@ fn append_out_of_order_returns_error() {
 
     h.append(1_000, &enc(1_000, serde_json::json!("a"))).unwrap();
     let err = h.append(999, &enc(999, serde_json::json!("b"))).unwrap_err();
-    match err { TvError::OutOfOrder { .. } => {}, other => panic!("unexpected {other:?}") }
+    match err {
+        TvError::OutOfOrder { .. } => {}
+        other => panic!("unexpected {other:?}"),
+    }
 }
 
 #[test]

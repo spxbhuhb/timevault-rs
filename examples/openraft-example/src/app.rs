@@ -1,6 +1,6 @@
-use crate::state::{DeviceStatus, SharedDeviceState};
 use crate::Raft;
 use crate::TvrNodeId;
+use crate::state::{DeviceStatus, SharedDeviceState};
 use parking_lot::Mutex;
 use std::path::PathBuf;
 use tokio::sync::oneshot;
@@ -24,5 +24,4 @@ impl App {
     pub fn take_shutdown_signal(&self) -> Option<oneshot::Sender<()>> {
         self.shutdown.lock().take()
     }
-
 }

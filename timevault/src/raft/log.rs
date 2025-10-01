@@ -6,12 +6,12 @@ use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
 use std::thread;
 
 use crate::PartitionHandle;
-use crate::store::disk::atomic::atomic_write_json;
 use crate::errors::TvError;
-use crate::store::partition::read::read_range_blocks;
 use crate::raft::errors::{map_send_err, recv_map, recv_unit};
 use crate::raft::paths;
 use crate::raft::{TvrConfig, TvrNodeId};
+use crate::store::disk::atomic::atomic_write_json;
+use crate::store::partition::read::read_range_blocks;
 use openraft::storage::{LogFlushed, RaftLogStorage};
 use openraft::{Entry, EntryPayload, ErrorSubject, ErrorVerb, LogId, LogState, OptionalSend, RaftLogReader, StorageError, Vote};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -185,7 +185,7 @@ where
     fn drop(&mut self) {
         let _ = self.tx.send(Op::Shutdown);
         if let Some(h) = self.thread_handle.take() {
-           let _ = h.join();
+            let _ = h.join();
         }
     }
 }
@@ -337,10 +337,7 @@ where
     D: serde::Serialize + DeserializeOwned + openraft::AppData,
     R: openraft::AppDataResponse,
 {
-    async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + OptionalSend>(
-        &mut self,
-        range: RB,
-    ) -> Result<Vec<Entry<TvrConfig<D, R>>>, StorageError<TvrNodeId>> {
+    async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + OptionalSend>(&mut self, range: RB) -> Result<Vec<Entry<TvrConfig<D, R>>>, StorageError<TvrNodeId>> {
         use std::ops::Bound::*;
         let start = match range.start_bound() {
             Included(a) => *a,

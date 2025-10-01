@@ -1,11 +1,13 @@
-use crate::store::disk::manifest::{ManifestLine, append_manifest_line, close_manifest_line};
 use crate::errors::{Result, TvError};
+use crate::store::disk::chunk;
+use crate::store::disk::manifest::{ManifestLine, append_manifest_line, close_manifest_line};
 use crate::store::partition::PartitionHandle;
 use crate::store::paths;
-use crate::store::disk::chunk;
 
 pub fn append(h: &PartitionHandle, order_key: u64, payload: &[u8]) -> Result<crate::store::partition::AppendAck> {
-    if h.inner.read_only { return Err(TvError::ReadOnly); }
+    if h.inner.read_only {
+        return Err(TvError::ReadOnly);
+    }
     let part_dir = paths::partition_dir(h.root(), h.id());
     let chunks_dir = paths::chunks_dir(&part_dir);
 
@@ -31,14 +33,18 @@ pub fn append(h: &PartitionHandle, order_key: u64, payload: &[u8]) -> Result<cra
 
 pub fn set_config(h: &PartitionHandle, delta: crate::store::partition::PartitionConfigDelta) -> Result<()> {
     let mut cfg = h.inner.cfg.write();
-    if let Some(p) = delta.format_plugin { cfg.format_plugin = p; }
+    if let Some(p) = delta.format_plugin {
+        cfg.format_plugin = p;
+    }
     Ok(())
 }
 
-
 fn ensure_ordering(rt: &crate::store::partition::PartitionRuntime, order_key: u64) -> Result<()> {
     if rt.cur_chunk_id.is_some() && order_key < rt.cur_chunk_max_order_key {
-        return Err(TvError::OutOfOrder { ts_ms: order_key as i64, last: rt.cur_chunk_max_order_key as i64 });
+        return Err(TvError::OutOfOrder {
+            ts_ms: order_key as i64,
+            last: rt.cur_chunk_max_order_key as i64,
+        });
     }
     Ok(())
 }
@@ -51,7 +57,9 @@ fn maybe_roll(h: &PartitionHandle, part_dir: &std::path::Path, rt: &mut crate::s
     } else if should_roll(rt, &cfg, order_key, next_len) {
         // flush pending index block before closing chunk
         if rt.cur_index_block_record_count > 0 {
-            if let Some(chunk_id) = rt.cur_chunk_id { flush_block(&paths::chunks_dir(part_dir), chunk_id, rt)?; }
+            if let Some(chunk_id) = rt.cur_chunk_id {
+                flush_block(&paths::chunks_dir(part_dir), chunk_id, rt)?;
+            }
         }
         finalize_current_chunk(&manifest_path, rt)?;
         start_new_chunk(&manifest_path, rt, order_key)?;
@@ -89,17 +97,23 @@ fn extend_block(rt: &mut crate::store::partition::PartitionRuntime, order_key: u
 }
 
 fn should_flush_block(rt: &crate::store::partition::PartitionRuntime, cfg: &crate::store::partition::PartitionConfig, order_key: u64) -> bool {
-    if rt.cur_index_block_record_count == 0 { return false; }
+    if rt.cur_index_block_record_count == 0 {
+        return false;
+    }
     let by_recs = cfg.index.max_records > 0 && (rt.cur_index_block_record_count as u32) >= cfg.index.max_records;
     let by_time = if cfg.key_is_timestamp {
         let max_ms = cfg.index.max_hours.saturating_mul(3_600_000);
         max_ms > 0 && (order_key.saturating_sub(rt.cur_index_block_min_order_key)) >= max_ms
-    } else { false };
+    } else {
+        false
+    };
     by_recs || by_time
 }
 
 fn flush_block(chunks_dir: &std::path::Path, chunk_id: u64, rt: &mut crate::store::partition::PartitionRuntime) -> Result<()> {
-    if rt.cur_index_block_record_count == 0 { return Ok(()); }
+    if rt.cur_index_block_record_count == 0 {
+        return Ok(());
+    }
     let index_path = paths::index_file(chunks_dir, chunk_id);
     let line = crate::store::disk::index::IndexLine {
         block_min_key: rt.cur_index_block_min_order_key,
@@ -109,7 +123,10 @@ fn flush_block(chunks_dir: &std::path::Path, chunk_id: u64, rt: &mut crate::stor
     };
     use std::io::Write;
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(index_path)?;
-    let mut buf = serde_json::to_vec(&line)?; buf.push(b'\n'); f.write_all(&buf)?; f.sync_all()?;
+    let mut buf = serde_json::to_vec(&line)?;
+    buf.push(b'\n');
+    f.write_all(&buf)?;
+    f.sync_all()?;
     // reset current block
     rt.cur_index_block_min_order_key = 0;
     rt.cur_index_block_max_order_key = 0;
@@ -121,29 +138,43 @@ fn flush_block(chunks_dir: &std::path::Path, chunk_id: u64, rt: &mut crate::stor
 
 fn update_stats(h: &PartitionHandle, bytes: u64) {
     let mut s = h.inner.stats.lock();
-    s.appends += 1; s.bytes += bytes; s.current_chunk_size += bytes;
+    s.appends += 1;
+    s.bytes += bytes;
+    s.current_chunk_size += bytes;
 }
 
 fn should_roll(rt: &crate::store::partition::PartitionRuntime, cfg: &crate::store::partition::PartitionConfig, order_key: u64, next_len: u64) -> bool {
-    if rt.cur_chunk_id.is_none() { return false; }
+    if rt.cur_chunk_id.is_none() {
+        return false;
+    }
     // Rule precedence:
     // 1) If chunk empty and next_len > MAX_BYTES, allow single oversized-record chunk: no roll.
-    if rt.cur_chunk_size_bytes == 0 && cfg.chunk_roll.max_bytes > 0 && next_len > cfg.chunk_roll.max_bytes { return false; }
+    if rt.cur_chunk_size_bytes == 0 && cfg.chunk_roll.max_bytes > 0 && next_len > cfg.chunk_roll.max_bytes {
+        return false;
+    }
     // 2) If same key as last in chunk, do not roll to keep same keys together.
-    if order_key == rt.cur_chunk_max_order_key { return false; }
+    if order_key == rt.cur_chunk_max_order_key {
+        return false;
+    }
     // 3) Size-based: roll if adding would meet or exceed max_bytes.
     let by_size = cfg.chunk_roll.max_bytes > 0 && rt.cur_chunk_size_bytes + next_len >= cfg.chunk_roll.max_bytes;
-    if by_size { return true; }
+    if by_size {
+        return true;
+    }
     // 4) Time-based: only if key_is_timestamp and Δt from chunk min >= max_hours.
     if cfg.key_is_timestamp {
         let max_ms = cfg.chunk_roll.max_hours.saturating_mul(3_600_000);
-        if max_ms > 0 && (order_key.saturating_sub(rt.cur_chunk_min_order_key)) >= max_ms { return true; }
+        if max_ms > 0 && (order_key.saturating_sub(rt.cur_chunk_min_order_key)) >= max_ms {
+            return true;
+        }
     }
     false
 }
 
 fn finalize_current_chunk(manifest_path: &std::path::Path, rt: &crate::store::partition::PartitionRuntime) -> Result<()> {
-    if rt.cur_chunk_id.is_none() { return Ok(()); }
+    if rt.cur_chunk_id.is_none() {
+        return Ok(());
+    }
     // Close the last open manifest entry by rewriting the last line to include max_order_key
     close_manifest_line(manifest_path, rt)
 }
@@ -151,7 +182,14 @@ fn finalize_current_chunk(manifest_path: &std::path::Path, rt: &crate::store::pa
 fn start_new_chunk(manifest_path: &std::path::Path, rt: &mut crate::store::partition::PartitionRuntime, order_key: u64) -> Result<()> {
     let new_id = order_key;
     // Write an open manifest line for the new chunk (no max_order_key)
-    append_manifest_line(manifest_path, ManifestLine { chunk_id: new_id, min_order_key: order_key, max_order_key: None })?;
+    append_manifest_line(
+        manifest_path,
+        ManifestLine {
+            chunk_id: new_id,
+            min_order_key: order_key,
+            max_order_key: None,
+        },
+    )?;
     // Create an empty index file alongside the new chunk using partition runtime
     crate::store::disk::index::create_empty_index_file(rt, new_id)?;
 
@@ -166,5 +204,3 @@ fn start_new_chunk(manifest_path: &std::path::Path, rt: &mut crate::store::parti
     rt.cur_index_block_record_count = 0;
     Ok(())
 }
-
-

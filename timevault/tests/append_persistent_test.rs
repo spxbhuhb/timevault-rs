@@ -1,10 +1,10 @@
 use std::fs;
-use uuid::Uuid;
 use test_utils::test_dir;
-use timevault::store::paths;
 use timevault::PartitionHandle;
 use timevault::store::disk::manifest::ManifestLine;
 use timevault::store::partition::{ChunkRollCfg, IndexCfg, RetentionCfg};
+use timevault::store::paths;
+use uuid::Uuid;
 
 // This test intentionally keeps its outputs on disk under target/test so they can be
 // manually inspected after `cargo test`. Other tests continue to use TempDir.
@@ -17,7 +17,6 @@ fn enc(ts: i64, value: serde_json::Value) -> Vec<u8> {
 
 #[test]
 fn append_persistent_outputs_under_target_test() {
-
     let id = Uuid::now_v7();
     let root = test_dir("append_persistent", id);
 
@@ -44,7 +43,10 @@ fn append_persistent_outputs_under_target_test() {
     for l in &lines {
         if l.max_order_key.is_some() {
             let ip = paths::index_file(&chunks_dir, l.chunk_id);
-            if ip.exists() { any_index = true; break; }
+            if ip.exists() {
+                any_index = true;
+                break;
+            }
         }
     }
     assert!(any_index, "expected at least one index file for a closed chunk");

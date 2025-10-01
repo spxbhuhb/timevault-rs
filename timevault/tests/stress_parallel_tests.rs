@@ -4,10 +4,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use timevault::store::Store;
 use timevault::store::StoreConfig;
 use timevault::store::partition::{PartitionConfig, PartitionHandle};
 use timevault::store::plugins::FormatPlugin;
-use timevault::store::Store;
 
 #[test]
 fn stress_parallel_append_and_read() {
@@ -85,4 +85,3 @@ fn project_root() -> PathBuf {
     }
     std::env::current_dir().unwrap()
 }
-

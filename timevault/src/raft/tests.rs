@@ -1,23 +1,23 @@
 #![cfg(test)]
 
 use crate::PartitionHandle;
-use crate::store::partition::PartitionConfig;
 use crate::raft::errors::recv_unit;
 use crate::raft::log::*;
-use crate::raft::{TvrNodeId, paths, TvrConfig, state};
+use crate::raft::{TvrConfig, TvrNodeId, paths, state};
+use crate::store::partition::PartitionConfig;
 use openraft::storage::RaftLogStorage;
 use openraft::testing::{StoreBuilder, Suite};
 use openraft::{BasicNode, CommittedLeaderId, Entry, EntryPayload, ErrorSubject, ErrorVerb, LogId, Membership, Vote};
 use openraft::{RaftLogReader, StorageError};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
-use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
+use test_utils::test_dir;
 #[cfg(feature = "traced-tests")]
 use tracing_test::traced_test;
 use uuid::Uuid;
-use test_utils::test_dir;
 
 pub type ValueRequest = serde_json::Value;
 

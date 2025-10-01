@@ -5,11 +5,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
-use openraft_example::client::ExampleClient;
 use openraft::LogId;
-use timevault::raft::TvrNodeId;
+use openraft_example::client::ExampleClient;
 use openraft_example::start_example_raft_node;
 use reqwest::Client as HttpClient;
+use timevault::raft::TvrNodeId;
 use tokio::task::JoinHandle;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -77,12 +77,8 @@ where
     node_ids
         .into_iter()
         .map(|node_id| {
-            let listener = TcpListener::bind("127.0.0.1:0")
-                .unwrap_or_else(|err| panic!("failed to allocate port for node {node_id}: {err}"));
-            let port = listener
-                .local_addr()
-                .unwrap_or_else(|err| panic!("failed to read local addr for node {node_id}: {err}"))
-                .port();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap_or_else(|err| panic!("failed to allocate port for node {node_id}: {err}"));
+            let port = listener.local_addr().unwrap_or_else(|err| panic!("failed to read local addr for node {node_id}: {err}")).port();
             drop(listener);
             (node_id, format!("127.0.0.1:{port}"))
         })
@@ -91,21 +87,18 @@ where
 
 /// Resolve address for a node ID.
 pub fn get_addr(node_addrs: &BTreeMap<u64, String>, node_id: u64) -> anyhow::Result<String> {
-    node_addrs
-        .get(&node_id)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("node {} not found", node_id))
+    node_addrs.get(&node_id).cloned().ok_or_else(|| anyhow::anyhow!("node {} not found", node_id))
 }
 
 /// Spawn one async task per node that runs `start_example_raft_node`.
 pub async fn spawn_nodes(root: &PathBuf, node_addrs: &BTreeMap<u64, String>) -> Vec<JoinHandle<()>> {
-    let root_str = root.to_string_lossy().to_string();
     let mut handles = Vec::with_capacity(node_addrs.len());
     for (&node_id, addr) in node_addrs {
         let addr = addr.clone();
-        let r = root_str.clone();
+        let node_root = root.join(format!("node-{node_id}"));
+        let node_root = node_root.to_string_lossy().to_string();
         handles.push(tokio::spawn(async move {
-            if let Err(err) = start_example_raft_node(node_id, &r, addr).await {
+            if let Err(err) = start_example_raft_node(node_id, &node_root, addr).await {
                 panic!("node {node_id} failed: {err:?}");
             }
         }));
@@ -114,26 +107,16 @@ pub async fn spawn_nodes(root: &PathBuf, node_addrs: &BTreeMap<u64, String>) -> 
 }
 
 /// Post shutdown to all nodes and await their join handles with a timeout.
-pub async fn shutdown_nodes(
-    node_addrs: &BTreeMap<u64, String>,
-    handles: Vec<JoinHandle<()>>,
-) -> anyhow::Result<()> {
+pub async fn shutdown_nodes(node_addrs: &BTreeMap<u64, String>, handles: Vec<JoinHandle<()>>) -> anyhow::Result<()> {
     let http = HttpClient::new();
     for (&node_id, addr) in node_addrs {
         let url = format!("http://{}/shutdown", addr);
-        let resp = http
-            .post(url)
-            .send()
-            .await
-            .with_context(|| format!("sending shutdown to node {node_id}"))?;
-        resp.error_for_status()
-            .with_context(|| format!("node {node_id} returned error status on shutdown"))?;
+        let resp = http.post(url).send().await.with_context(|| format!("sending shutdown to node {node_id}"))?;
+        resp.error_for_status().with_context(|| format!("node {node_id} returned error status on shutdown"))?;
     }
 
     for handle in handles {
-        let join_result = tokio::time::timeout(Duration::from_secs(10), handle)
-            .await
-            .context("node task did not shutdown in time")?;
+        let join_result = tokio::time::timeout(Duration::from_secs(10), handle).await.context("node task did not shutdown in time")?;
         join_result.expect("node task should shutdown cleanly");
     }
     Ok(())

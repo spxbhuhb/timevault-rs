@@ -1,5 +1,5 @@
-use thiserror::Error;
 use std::path::PathBuf;
+use thiserror::Error;
 
 pub type Result<T, E = TvError> = std::result::Result<T, E>;
 

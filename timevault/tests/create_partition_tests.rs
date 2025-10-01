@@ -1,9 +1,9 @@
 use tempfile::TempDir;
 use uuid::Uuid;
 
-use timevault::store::paths;
-use timevault::{PartitionHandle};
+use timevault::PartitionHandle;
 use timevault::store::partition::PartitionConfig;
+use timevault::store::paths;
 
 #[test]
 fn create_initializes_structure_and_metadata() {

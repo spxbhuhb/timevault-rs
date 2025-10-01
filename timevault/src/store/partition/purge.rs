@@ -1,14 +1,13 @@
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 
-
+use crate::errors::{Result, TvError};
 use crate::store::disk::index::{IndexLine, load_index_lines};
 use crate::store::disk::manifest::{ManifestLine, load_manifest};
-use crate::errors::{Result, TvError};
 use crate::store::partition::PartitionHandle;
 use crate::store::partition::misc;
-use crate::store::plugins::FormatPlugin;
 use crate::store::paths;
+use crate::store::plugins::FormatPlugin;
 
 pub fn purge(h: &PartitionHandle, cutoff_key: u64) -> Result<()> {
     misc::ensure_writable(h)?;

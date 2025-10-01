@@ -11,11 +11,11 @@ use uuid::Uuid;
 use crate::errors::{Result, TvError};
 use crate::store::Store;
 use crate::store::disk::index::{self, IndexLine};
+use crate::store::disk::manifest::{ManifestLine, load_manifest};
+use crate::store::disk::metadata::{self, MetadataJson};
 use crate::store::partition::misc;
 use crate::store::partition::{PartitionHandle, PartitionRuntime};
 use crate::store::paths as store_paths;
-use crate::store::disk::manifest::{load_manifest, ManifestLine};
-use crate::store::disk::metadata::{self, MetadataJson};
 use crate::store::transfer::{DataTransfer, FileDownload, TransferRange};
 
 const MAX_TRANSFER_ATTEMPTS: usize = 3;

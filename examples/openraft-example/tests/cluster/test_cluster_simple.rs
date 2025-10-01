@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use maplit::btreeset;
 use openraft::BasicNode;
-use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::info;
 use openraft_example::client::ExampleClient;
 use openraft_example::state::{DeviceStatus, ExampleEvent};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::info;
 
 use example_test_utils::{allocate_node_addrs, client_for, init_tracing, set_panic_hook, shutdown_nodes, spawn_nodes, unique_test_root};
 
@@ -64,10 +64,7 @@ async fn test_cluster_simple() -> anyhow::Result<()> {
     assert_eq!(&vec![btreeset![1]], x.membership_config.membership().get_joint_config());
 
     let nodes_in_cluster = x.membership_config.nodes().map(|(nid, node)| (*nid, node.clone())).collect::<BTreeMap<_, _>>();
-    let expected_nodes = node_addrs
-        .iter()
-        .map(|(node_id, addr)| (*node_id, BasicNode::new(addr.clone())))
-        .collect::<BTreeMap<_, _>>();
+    let expected_nodes = node_addrs.iter().map(|(node_id, addr)| (*node_id, BasicNode::new(addr.clone()))).collect::<BTreeMap<_, _>>();
 
     assert_eq!(expected_nodes, nodes_in_cluster);
 
@@ -134,7 +131,7 @@ async fn test_cluster_simple() -> anyhow::Result<()> {
 
     info!("=== change-membership to 3, ");
     let _x = client.change_membership(&btreeset! {3}).await?;
-    
+
     info!("=== metrics after change-membership to {{3}}");
     let x = client.metrics().await?;
     assert_eq!(&vec![btreeset![3]], x.membership_config.membership().get_joint_config());
