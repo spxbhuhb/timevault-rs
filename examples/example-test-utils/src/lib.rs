@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use anyhow::Context;
 use openraft_example::client::ExampleClient;
+use openraft::LogId;
+use timevault::raft::TvrNodeId;
 use openraft_example::start_example_raft_node;
 use reqwest::Client as HttpClient;
 use tokio::task::JoinHandle;
@@ -141,4 +143,41 @@ pub async fn shutdown_nodes(
 pub fn client_for(node_addrs: &BTreeMap<u64, String>, leader_id: u64) -> anyhow::Result<ExampleClient> {
     let addr = get_addr(node_addrs, leader_id)?;
     Ok(ExampleClient::new(leader_id, addr))
+}
+
+/// Poll metrics until a leader is present or timeout occurs.
+pub async fn wait_for_leader(client: &ExampleClient, timeout: Duration) -> anyhow::Result<TvrNodeId> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if let Ok(metrics) = client.metrics().await {
+            if let Some(leader) = metrics.current_leader {
+                return Ok(leader);
+            }
+        }
+
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for leader");
+        }
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// Poll metrics until a snapshot with at least `min_index` is observed or timeout occurs.
+pub async fn wait_for_snapshot(client: &ExampleClient, min_index: u64, timeout: Duration) -> anyhow::Result<LogId<TvrNodeId>> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let metrics = client.metrics().await?;
+        if let Some(snapshot) = metrics.snapshot {
+            if snapshot.index >= min_index {
+                return Ok(snapshot);
+            }
+        }
+
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for snapshot; last snapshot: {:?}", metrics.snapshot);
+        }
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
 }

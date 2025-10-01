@@ -9,6 +9,7 @@ path = "src/lib.rs"
 [dependencies]
 anyhow = "1"
 reqwest = { version = "0.12.23", features = ["json"] }
+timevault = { path = "../../timevault" }
 tokio = { version = "1", features = ["rt","rt-multi-thread", "macros", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -19,4 +20,5 @@ test-utils = { path = "../../test-utils" }
 
 # Access the example crate to spawn nodes and build clients
 openraft-example = { path = "../openraft-example" }
+openraft = "0.9.21"
 

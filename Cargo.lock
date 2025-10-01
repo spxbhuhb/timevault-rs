@@ -713,9 +713,11 @@ name = "example-test-utils"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "openraft",
  "openraft-example",
  "reqwest",
  "test-utils",
+ "timevault",
  "tokio",
  "tracing",
  "tracing-subscriber",

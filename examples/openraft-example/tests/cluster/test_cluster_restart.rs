@@ -12,11 +12,11 @@ use example_test_utils::{allocate_node_addrs, client_for, init_tracing, set_pani
 /// Setup a cluster of 3 nodes, flood it with events to force a snapshot,
 /// and verify state via reads and metrics.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-async fn test_cluster_stress() -> anyhow::Result<()> {
+async fn test_cluster_restart() -> anyhow::Result<()> {
     set_panic_hook();
     init_tracing();
 
-    let root = unique_test_root("test_cluster_stress");
+    let root = unique_test_root("test_cluster_restart");
 
     let node_addrs = allocate_node_addrs([1, 2, 3]);
     let handles = spawn_nodes(&root, &node_addrs).await;
@@ -84,6 +84,35 @@ async fn test_cluster_stress() -> anyhow::Result<()> {
     assert!(refreshed.iter().any(|status| status.device_id == device_ids[0] && status.is_online));
 
     shutdown_nodes(&node_addrs, handles).await?;
+
+    // --- Restart the cluster with the same root but different ports
+    let node_addrs2 = allocate_node_addrs([1_u64, 2, 3]);
+    let handles2 = spawn_nodes(&root, &node_addrs2).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let client = client_for(&node_addrs2, 1)?;
+    client.init().await?;
+    client.add_learner((2, get_addr(&node_addrs2, 2)?)).await?;
+    client.add_learner((3, get_addr(&node_addrs2, 3)?)).await?;
+    client.change_membership(&btreeset! {1,2,3}).await?;
+    wait_for_leader(&client, Duration::from_secs(10)).await?;
+
+    // Fetch and log metrics after restart
+    let metrics_after = client.metrics().await?;
+    tracing::info!(?metrics_after, "metrics after restart");
+
+    // Basic operation check after restart
+    let device_after = Uuid::now_v7();
+    let event_after = ExampleEvent::DeviceOnline {
+        event_id: Uuid::now_v7(),
+        device_id: device_after,
+        timestamp: base_timestamp + total_events + 2,
+    };
+    client.write(&event_after).await?;
+    let refreshed_after = client.read().await?;
+    assert!(refreshed_after.iter().any(|status| status.device_id == device_after && status.is_online));
+
+    shutdown_nodes(&node_addrs2, handles2).await?;
 
     Ok(())
 }

@@ -2,3 +2,4 @@
 
 mod test_cluster_stress;
 mod test_cluster_simple;
+mod test_cluster_restart;
