@@ -5,7 +5,9 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-use example_test_utils::{allocate_node_addrs, client_for, get_addr, init_tracing, set_panic_hook, shutdown_nodes, spawn_nodes, unique_test_root, wait_for_http_ready, wait_for_leader, wait_for_snapshot};
+use example_test_utils::{
+    allocate_node_addrs, client_for, get_addr, init_tracing, set_panic_hook, shutdown_nodes, spawn_nodes, unique_test_root, wait_for_http_ready, wait_for_leader, wait_for_snapshot,
+};
 
 // wait_for_leader and wait_for_snapshot moved to example-test-utils
 

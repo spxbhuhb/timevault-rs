@@ -128,13 +128,24 @@ pub fn client_for(node_addrs: &BTreeMap<u64, String>, leader_id: u64) -> anyhow:
     Ok(ExampleClient::new(leader_id, addr))
 }
 
+/// Send shutdown to a single node and await its task completion.
+pub async fn shutdown_node(node_id: u64, addr: &str, handle: JoinHandle<()>) -> anyhow::Result<()> {
+    let http = HttpClient::new();
+    let url = format!("http://{addr}/shutdown");
+    let resp = http.post(url).send().await.with_context(|| format!("sending shutdown to node {node_id}"))?;
+    resp.error_for_status().with_context(|| format!("node {node_id} returned error status on shutdown"))?;
+    let join_result = tokio::time::timeout(Duration::from_secs(10), handle).await.context("node task did not shutdown in time")?;
+    join_result.expect("node task should shutdown cleanly");
+    Ok(())
+}
+
 /// Poll each node until its `/metrics` endpoint returns success.
 pub async fn wait_for_http_ready(node_addrs: &BTreeMap<u64, String>, timeout: Duration) -> anyhow::Result<()> {
     let client = HttpClient::new();
     for (&node_id, addr) in node_addrs {
         let url = format!("http://{}/metrics", addr);
         let deadline = Instant::now() + timeout;
-        let mut last_err: Option<String>;
+        let mut last_err: Option<String> = None;
 
         loop {
             match client.get(&url).send().await {
