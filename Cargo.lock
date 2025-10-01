@@ -709,6 +709,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-test-utils"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "openraft-example",
+ "reqwest",
+ "test-utils",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1515,9 +1529,9 @@ dependencies = [
  "actix-web",
  "anyhow",
  "clap",
+ "example-test-utils",
  "maplit",
  "openraft",
- "openraft-macros",
  "parking_lot",
  "reqwest",
  "serde",

@@ -1,52 +1,14 @@
-use std::backtrace::Backtrace;
 use std::collections::BTreeMap;
-use std::net::TcpListener;
-#[allow(deprecated)]
-use std::panic::PanicInfo;
 use std::time::Duration;
 
 use maplit::btreeset;
 use openraft::BasicNode;
 use std::time::{SystemTime, UNIX_EPOCH};
-
+use tracing::info;
 use openraft_example::client::ExampleClient;
-use openraft_example::start_example_raft_node;
 use openraft_example::state::{DeviceStatus, ExampleEvent};
-use reqwest::Client;
-use tracing_subscriber::EnvFilter;
 
-#[allow(deprecated)]
-pub fn log_panic(panic: &PanicInfo) {
-    let backtrace = {
-        format!("{:?}", Backtrace::force_capture())
-        // #[cfg(feature = "bt")]
-        // {
-        //     format!("{:?}", Backtrace::force_capture())
-        // }
-        //
-        // #[cfg(not(feature = "bt"))]
-        // {
-        //     "backtrace is disabled without --features 'bt'".to_string()
-        // }
-    };
-
-    eprintln!("{}", panic);
-
-    if let Some(location) = panic.location() {
-        tracing::error!(
-            message = %panic,
-            backtrace = %backtrace,
-            panic.file = location.file(),
-            panic.line = location.line(),
-            panic.column = location.column(),
-        );
-        eprintln!("{}:{}:{}", location.file(), location.line(), location.column());
-    } else {
-        tracing::error!(message = %panic, backtrace = %backtrace);
-    }
-
-    eprintln!("{}", backtrace);
-}
+use example_test_utils::{allocate_node_addrs, client_for, init_tracing, set_panic_hook, shutdown_nodes, spawn_nodes, unique_test_root};
 
 /// Setup a cluster of 3 nodes.
 /// Write to it and read from it.
@@ -57,86 +19,46 @@ async fn test_cluster_simple() -> anyhow::Result<()> {
     //     This is only used by the client. A raft node in this example stores node addresses in its
     // store.
 
-    std::panic::set_hook(Box::new(|panic| {
-        log_panic(panic);
-    }));
+    set_panic_hook();
 
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    //.add_directive("timevault::raft::log=trace".parse()?);
+    init_tracing();
 
-    tracing_subscriber::fmt()
-        .with_target(true)
-        .with_thread_ids(true)
-        .with_level(true)
-        .with_ansi(false)
-        .with_env_filter(filter)
-        .init();
+    let root = unique_test_root("test_cluster_simple");
 
-    let root = "./var";
+    let node_addrs: BTreeMap<u64, String> = allocate_node_addrs([1_u64, 2, 3]);
 
-    // Clear the root directory recursively to ensure a clean test environment
-    let _ = std::fs::remove_dir_all(root);
-    std::fs::create_dir_all(root)?;
-
-    let node_addrs: BTreeMap<u64, String> = [1_u64, 2, 3]
-        .into_iter()
-        .map(|node_id| {
-            let listener = TcpListener::bind("127.0.0.1:0")
-                .unwrap_or_else(|err| panic!("failed to allocate port for node {node_id}: {err}"));
-            let port = listener
-                .local_addr()
-                .unwrap_or_else(|err| panic!("failed to read local addr for node {node_id}: {err}"))
-                .port();
-            drop(listener);
-            (node_id, format!("127.0.0.1:{port}"))
-        })
-        .collect();
-
-    let get_addr = |node_id| {
-        node_addrs
-            .get(&node_id)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("node {} not found", node_id))
-    };
+    // Helper to mirror old closure behavior for address lookup
+    let get_addr = |node_id| example_test_utils::get_addr(&node_addrs, node_id);
 
     // --- Start 3 raft nodes in 3 threads.
-
-    let mut node_handles = Vec::new();
-    for (&node_id, addr) in &node_addrs {
-        let addr = addr.clone();
-        node_handles.push(tokio::spawn(async move {
-            if let Err(err) = start_example_raft_node(node_id, root, addr).await {
-                panic!("node {node_id} failed: {err:?}");
-            }
-        }));
-    }
+    let node_handles = spawn_nodes(&root, &node_addrs).await;
 
     // Wait for server to start up.
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // --- Create a client to the first node, as a control handle to the cluster.
 
-    let client = ExampleClient::new(1, get_addr(1)?);
+    let client = client_for(&node_addrs, 1)?;
 
     // --- 1. Initialize the target node as a cluster of only one node.
     //        After init(), the single node cluster will be fully functional.
 
-    println!("=== init single node cluster");
+    info!("=== init single node cluster");
     client.init().await?;
 
-    println!("=== metrics after init");
+    info!("=== metrics after init");
     let _x = client.metrics().await?;
 
     // --- 2. Add node 2 and 3 to the cluster as `Learner`, to let them start to receive log replication
     // from the        leader.
 
-    println!("=== add-learner 2");
+    info!("=== add-learner 2");
     let _x = client.add_learner((2, get_addr(2)?)).await?;
 
-    println!("=== add-learner 3");
+    info!("=== add-learner 3");
     let _x = client.add_learner((3, get_addr(3)?)).await?;
 
-    println!("=== metrics after add-learner");
+    info!("=== metrics after add-learner");
     let x = client.metrics().await?;
 
     assert_eq!(&vec![btreeset![1]], x.membership_config.membership().get_joint_config());
@@ -151,7 +73,7 @@ async fn test_cluster_simple() -> anyhow::Result<()> {
 
     // --- 3. Turn the two learners to members. A member node can vote or elect itself as leader.
 
-    println!("=== change-membership to 1,2,3");
+    info!("=== change-membership to 1,2,3");
     let _x = client.change_membership(&btreeset! {1,2,3}).await?;
 
     // --- After change-membership, some cluster state will be seen in the metrics.
@@ -169,15 +91,15 @@ async fn test_cluster_simple() -> anyhow::Result<()> {
     // }
     // ```
 
-    println!("=== metrics after change-member");
+    info!("=== metrics after change-member");
     let x = client.metrics().await?;
     assert_eq!(&vec![btreeset![1, 2, 3]], x.membership_config.membership().get_joint_config());
 
     // --- Try to write some application data through the leader.
 
-    println!("=== write device online event");
+    info!("=== write device online event");
     let device_id = uuid::Uuid::now_v7();
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
     let event = ExampleEvent::DeviceOnline {
         event_id: uuid::Uuid::now_v7(),
         device_id,
@@ -191,45 +113,30 @@ async fn test_cluster_simple() -> anyhow::Result<()> {
 
     // --- Read it on every node.
 
-    println!("=== read statuses on node 1");
+    info!("=== read statuses on node 1");
     let statuses = client.read().await?;
     assert!(statuses.iter().any(|s: &DeviceStatus| s.device_id == device_id && s.is_online));
 
-    println!("=== read statuses on node 2");
+    info!("=== read statuses on node 2");
     let client2 = ExampleClient::new(2, get_addr(2)?);
     let statuses = client2.read().await?;
     assert!(statuses.iter().any(|s: &DeviceStatus| s.device_id == device_id && s.is_online));
 
-    println!("=== read statuses on node 3");
+    info!("=== read statuses on node 3");
     let client3 = ExampleClient::new(3, get_addr(3)?);
     let statuses = client3.read().await?;
     assert!(statuses.iter().any(|s: &DeviceStatus| s.device_id == device_id && s.is_online));
 
     // --- Remove node 1,2 from the cluster.
 
-    println!("=== change-membership to 3, ");
+    info!("=== change-membership to 3, ");
     let _x = client.change_membership(&btreeset! {3}).await?;
-
-    tokio::time::sleep(Duration::from_millis(8_000)).await;
-
-    println!("=== metrics after change-membership to {{3}}");
+    
+    info!("=== metrics after change-membership to {{3}}");
     let x = client.metrics().await?;
     assert_eq!(&vec![btreeset![3]], x.membership_config.membership().get_joint_config());
 
-    let shutdown_client = Client::new();
-    for node_id in [1_u64, 2, 3] {
-        let addr = get_addr(node_id)?;
-        let url = format!("http://{}/shutdown", addr);
-        let response = shutdown_client.post(url).send().await?;
-        response.error_for_status()?;
-    }
-
-    for handle in node_handles {
-        let join_result = tokio::time::timeout(Duration::from_secs(10), handle)
-            .await
-            .map_err(|_| anyhow::anyhow!("node task did not shutdown in time"))?;
-        join_result.expect("node task should shutdown cleanly");
-    }
+    shutdown_nodes(&node_addrs, node_handles).await?;
 
     Ok(())
 }

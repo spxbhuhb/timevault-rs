@@ -13,7 +13,7 @@ use actix_web::HttpServer;
 use actix_web::middleware;
 use actix_web::middleware::Logger;
 use actix_web::web::Data;
-use openraft::Config;
+use openraft::{Config, SnapshotPolicy};
 use parking_lot::Mutex;
 use timevault::PartitionHandle;
 use timevault::raft::log::TvrLogAdapter;
@@ -75,6 +75,7 @@ pub async fn start_example_raft_node(node_id: TvrNodeId, root: &str, http_addr: 
         heartbeat_interval: 500,
         election_timeout_min: 1500,
         election_timeout_max: 3000,
+        snapshot_policy: SnapshotPolicy::LogsSinceLast(40),
         ..Default::default()
     };
     let config = Arc::new(config.validate()?);

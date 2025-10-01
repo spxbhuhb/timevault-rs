@@ -14,8 +14,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = ["rt","rt-multi-thread", "macros", "sync", "time"] }
 uuid = { version = "1", features = ["v7", "serde"] }
-openraft-macros = "0.9.21"
 reqwest = { version = "0.12.23", features = ["json"] }
 anyhow = "1.0.63"
 maplit = "1.0.2"
 parking_lot = "0.12"
+
+[dev-dependencies]
+example-test-utils = { path = "../example-test-utils" }

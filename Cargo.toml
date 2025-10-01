@@ -1,5 +1,5 @@
 [workspace]
-members = ["timevault", "examples/openraft-example", "test-utils"]
+members = ["timevault", "examples/openraft-example", "examples/example-test-utils", "test-utils"]
 resolver = "2"
 
 # Optional: keep artifacts at repo root
