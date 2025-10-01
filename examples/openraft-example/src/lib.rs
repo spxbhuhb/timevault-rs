@@ -62,7 +62,12 @@ pub async fn start_example_raft_node(node_id: TvrNodeId, root: &str, http_addr: 
     let mut cfg = PartitionConfig::default();
     cfg.format_plugin = "jsonl".to_string();
 
-    let log_part = PartitionHandle::create(root.clone(), log_part_id, cfg.clone())?;
+    let log_part_dir = timevault::store::paths::partition_dir(&root, log_part_id);
+    let log_part = if log_part_dir.exists() {
+        PartitionHandle::open(root.clone(), log_part_id)?
+    } else {
+        PartitionHandle::create(root.clone(), log_part_id, cfg.clone())?
+    };
 
     // Build storage components using timevault adapters.
     let log_store = ExampleLogStore::new(log_part, node_id);
@@ -132,17 +137,23 @@ pub async fn start_example_raft_node(node_id: TvrNodeId, root: &str, http_addr: 
     let server = server.bind(http_addr)?.run();
     let handle = server.handle();
     tokio::pin!(server);
+    let mut server_stopped = false;
 
     tokio::select! {
         res = &mut server => {
             res?;
-            Ok(())
+            server_stopped = true;
         }
         _ = shutdown_rx => {
             tracing::info!(node_id, "shutdown signal received");
             let _ = handle.stop(false);
             tracing::info!(node_id, "actix stop requested");
-            Ok(())
         }
     }
+
+    if !server_stopped {
+        server.await?;
+    }
+
+    Ok(())
 }

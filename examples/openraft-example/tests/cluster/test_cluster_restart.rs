@@ -11,7 +11,6 @@ use example_test_utils::{allocate_node_addrs, client_for, get_addr, init_tracing
 
 /// Setup a cluster of 3 nodes, flood it with events to force a snapshot,
 /// and verify state via reads and metrics.
-#[ignore]
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_cluster_restart() -> anyhow::Result<()> {
     set_panic_hook();
@@ -92,27 +91,47 @@ async fn test_cluster_restart() -> anyhow::Result<()> {
         partition_id,
     };
     client.write(&verification_event).await?;
+    let (verification_event_id, verification_timestamp) = match &verification_event {
+        ExampleEvent::DeviceOnline { event_id, timestamp, .. } | ExampleEvent::DeviceOffline { event_id, timestamp, .. } => (*event_id, *timestamp),
+    };
+    expected_statuses.insert(
+        device_ids[0],
+        DeviceStatus {
+            device_id: device_ids[0],
+            is_online: true,
+            last_event_id: verification_event_id,
+            last_timestamp: verification_timestamp,
+        },
+    );
 
     let refreshed = client.read().await?;
     assert!(refreshed.iter().any(|status| status.device_id == device_ids[0] && status.is_online));
 
     shutdown_nodes(&node_addrs, handles).await?;
 
-    // --- Restart the cluster with the same root but different ports
-    let node_addrs2 = allocate_node_addrs([1_u64, 2, 3]);
-    let handles2 = spawn_nodes(&root, &node_addrs2).await;
+    // --- Restart the cluster with the same root and same ports
+    let handles2 = spawn_nodes(&root, &node_addrs).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let client = client_for(&node_addrs2, 1)?;
-    client.init().await?;
-    client.add_learner((2, get_addr(&node_addrs2, 2)?)).await?;
-    client.add_learner((3, get_addr(&node_addrs2, 3)?)).await?;
-    client.change_membership(&btreeset! {1,2,3}).await?;
-    wait_for_leader(&client, Duration::from_secs(10)).await?;
+    let client = client_for(&node_addrs, 1)?;
+    let leader = wait_for_leader(&client, Duration::from_secs(10)).await?;
+    tracing::info!(leader, "leader detected after restart");
 
-    // Fetch and log metrics after restart
+    // The cluster should retain its membership configuration from the previous run.
     let metrics_after = client.metrics().await?;
     tracing::info!(?metrics_after, "metrics after restart");
+    assert_eq!(&vec![btreeset![1, 2, 3]], metrics_after.membership_config.membership().get_joint_config());
+
+    // Existing replicated state should still be readable.
+    let statuses_after_restart = client.read().await?;
+    for (device, expected) in &expected_statuses {
+        let Some(found) = statuses_after_restart.iter().find(|status| status.device_id == *device) else {
+            panic!("device {:?} missing after restart", device);
+        };
+        assert_eq!(found.is_online, expected.is_online);
+        assert_eq!(found.last_event_id, expected.last_event_id);
+        assert_eq!(found.last_timestamp, expected.last_timestamp);
+    }
 
     // Basic operation check after restart
     let device_after = Uuid::now_v7();
@@ -126,7 +145,7 @@ async fn test_cluster_restart() -> anyhow::Result<()> {
     let refreshed_after = client.read().await?;
     assert!(refreshed_after.iter().any(|status| status.device_id == device_after && status.is_online));
 
-    shutdown_nodes(&node_addrs2, handles2).await?;
+    shutdown_nodes(&node_addrs, handles2).await?;
 
     Ok(())
 }

@@ -48,7 +48,7 @@ pub fn init_tracing() {
         let mut filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
         // Reduce noise from dependencies: suppress `info` from openraft and actix
         filter = filter
-            .add_directive("openraft=warn".parse().unwrap())
+            .add_directive("openraft=info".parse().unwrap())
             .add_directive("actix_web=warn".parse().unwrap())
             .add_directive("actix_server=warn".parse().unwrap())
             .add_directive("actix_http=warn".parse().unwrap());

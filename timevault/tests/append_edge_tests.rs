@@ -3,7 +3,6 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use timevault::PartitionHandle;
-use timevault::errors::TvError;
 use timevault::store::disk::index::load_index_lines;
 use timevault::store::disk::manifest::ManifestLine;
 use timevault::store::partition::{ChunkRollCfg, IndexCfg, RetentionCfg};
@@ -42,7 +41,7 @@ fn read_manifest_lines(p: &std::path::Path) -> Vec<ManifestLine> {
 }
 
 #[test]
-fn append_out_of_order_returns_error() {
+fn append_out_of_order_is_ignored() {
     let td = TempDir::new().unwrap();
     let root = td.path().to_path_buf();
     let id = Uuid::now_v7();
@@ -52,11 +51,16 @@ fn append_out_of_order_returns_error() {
     let h = PartitionHandle::open(root.clone(), id).unwrap();
 
     h.append(1_000, &enc(1_000, serde_json::json!("a"))).unwrap();
-    let err = h.append(999, &enc(999, serde_json::json!("b"))).unwrap_err();
-    match err {
-        TvError::OutOfOrder { .. } => {}
-        other => panic!("unexpected {other:?}"),
-    }
+    let manifest_path = paths::partition_manifest(&part_dir);
+    let chunk_id = read_manifest_lines(&manifest_path).first().unwrap().chunk_id;
+    let chunk_path = paths::chunk_file(&paths::chunks_dir(&part_dir), chunk_id);
+    let before = std::fs::read(&chunk_path).unwrap();
+
+    let ack = h.append(999, &enc(999, serde_json::json!("b"))).unwrap();
+    assert_eq!(ack.offset as usize, before.len());
+
+    let after = std::fs::read(&chunk_path).unwrap();
+    assert_eq!(before, after, "out-of-order append should be ignored");
 }
 
 #[test]

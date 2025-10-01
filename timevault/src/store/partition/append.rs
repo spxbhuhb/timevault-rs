@@ -13,7 +13,9 @@ pub fn append(h: &PartitionHandle, order_key: u64, payload: &[u8]) -> Result<cra
 
     let offset = {
         let mut rt = h.inner.runtime.write();
-        ensure_ordering(&rt, order_key)?;
+        if ensure_ordering(&rt, order_key)?.is_none() {
+            return Ok(crate::store::partition::AppendAck { offset: rt.cur_chunk_size_bytes });
+        }
         maybe_roll(h, &part_dir, &mut rt, order_key, payload.len() as u64)?;
         let chunk_id = rt.cur_chunk_id.expect("chunk id set by maybe_roll/start_new_chunk");
         let off = append_to_chunk(&chunks_dir, chunk_id, &payload)?; // payload is opaque, it is the responsibility of the caller to validate it
@@ -39,14 +41,11 @@ pub fn set_config(h: &PartitionHandle, delta: crate::store::partition::Partition
     Ok(())
 }
 
-fn ensure_ordering(rt: &crate::store::partition::PartitionRuntime, order_key: u64) -> Result<()> {
+fn ensure_ordering(rt: &crate::store::partition::PartitionRuntime, order_key: u64) -> Result<Option<()>> {
     if rt.cur_chunk_id.is_some() && order_key < rt.cur_chunk_max_order_key {
-        return Err(TvError::OutOfOrder {
-            ts_ms: order_key as i64,
-            last: rt.cur_chunk_max_order_key as i64,
-        });
+        return Ok(None);
     }
-    Ok(())
+    Ok(Some(()))
 }
 
 fn maybe_roll(h: &PartitionHandle, part_dir: &std::path::Path, rt: &mut crate::store::partition::PartitionRuntime, order_key: u64, next_len: u64) -> Result<()> {
