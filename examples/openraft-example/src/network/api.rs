@@ -6,6 +6,7 @@ use timevault::store::transfer::{DataTransfer, FileDownload, ManifestDownload, T
 use uuid::Uuid;
 
 use crate::app::App;
+use crate::network::transfer::StoreTransferServer;
 use crate::state::{DeviceStatus, ExampleEvent};
 
 #[post("/write")]
@@ -18,6 +19,13 @@ pub async fn write(app: Data<App>, req: Json<ExampleEvent>) -> actix_web::Result
 pub async fn read(app: Data<App>) -> actix_web::Result<impl Responder> {
     let devices: Vec<DeviceStatus> = app.snapshot_devices();
     Ok(Json(Ok::<_, crate::typ::RaftError>(devices)))
+}
+
+#[get("/partitions")]
+pub async fn partitions(app: Data<App>) -> actix_web::Result<impl Responder> {
+    let ids = timevault::store::paths::list_partitions(&app.root)
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    Ok(Json(Ok::<_, crate::typ::RaftError>(ids)))
 }
 
 #[derive(Serialize)]
@@ -78,7 +86,8 @@ struct RangeQuery {
 #[get("/transfer/{partition}/manifest")]
 pub async fn transfer_manifest(app: Data<App>, path: Path<(Uuid,)>) -> actix_web::Result<impl Responder> {
     let (partition,) = path.into_inner();
-    let manifest = app.download_manifest(partition).map_err(actix_web::error::ErrorInternalServerError)?;
+    let server = StoreTransferServer { root: app.root.clone() };
+    let manifest = server.download_manifest(partition).map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(Json(ManifestResponse::from(manifest)))
 }
 
@@ -86,7 +95,8 @@ pub async fn transfer_manifest(app: Data<App>, path: Path<(Uuid,)>) -> actix_web
 pub async fn transfer_chunk(app: Data<App>, path: Path<(Uuid, u64)>, query: Query<RangeQuery>) -> actix_web::Result<impl Responder> {
     let (partition, chunk_id) = path.into_inner();
     let range = TransferRange { start: query.start, end: query.end };
-    let download = app.download_chunk(partition, chunk_id, range).map_err(actix_web::error::ErrorInternalServerError)?;
+    let server = StoreTransferServer { root: app.root.clone() };
+    let download = server.download_chunk(partition, chunk_id, range).map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(Json(FileResponse::from(download)))
 }
 
@@ -94,7 +104,8 @@ pub async fn transfer_chunk(app: Data<App>, path: Path<(Uuid, u64)>, query: Quer
 pub async fn transfer_index(app: Data<App>, path: Path<(Uuid, u64)>, query: Query<RangeQuery>) -> actix_web::Result<impl Responder> {
     let (partition, chunk_id) = path.into_inner();
     let range = TransferRange { start: query.start, end: query.end };
-    let download = app.download_index(partition, chunk_id, range).map_err(actix_web::error::ErrorInternalServerError)?;
+    let server = StoreTransferServer { root: app.root.clone() };
+    let download = server.download_index(partition, chunk_id, range).map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(Json(FileResponse::from(download)))
 }
 

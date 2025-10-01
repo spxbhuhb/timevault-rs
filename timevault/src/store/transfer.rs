@@ -1,21 +1,22 @@
+use serde::{Deserialize, Serialize};
 use crate::errors::Result;
 use crate::store::disk::manifest::ManifestLine;
 use uuid::Uuid;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestDownload {
     pub partition_id: Uuid,
     pub lines: Vec<ManifestLine>,
     pub version: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct TransferRange {
     pub start: u64,
     pub end: Option<u64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileDownload {
     pub partition_id: Uuid,
     pub chunk_id: u64,

@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::store::disk::metadata::MetadataJson;
 use crate::store::partition::PartitionConfig;
 
+#[derive(Debug)]
 pub struct Store {
     root: PathBuf,
     cfg: StoreConfig,

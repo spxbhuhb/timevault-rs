@@ -7,6 +7,11 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use timevault::PartitionHandle;
 use timevault::raft::state::{SnapshotData, StateMachineData, StoredSnapshot};
+use timevault::store::disk::metadata::MetadataJson;
+use timevault::store::snapshot::{build_store_snapshot_all, ensure_partitions_from_snapshot, install_store_snapshot, StoreSnapshot};
+use crate::network::transfer::StoreTransferClient;
+use timevault::store::{Store, StoreConfig};
+use timevault::store::partition::PartitionConfig;
 use timevault::raft::{TvrNode, TvrNodeId};
 use timevault::store::disk::atomic::atomic_write_json;
 use uuid::Uuid;
@@ -16,8 +21,8 @@ use crate::ExampleConfig;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ExampleEvent {
-    DeviceOffline { event_id: Uuid, device_id: Uuid, timestamp: i64 },
-    DeviceOnline { event_id: Uuid, device_id: Uuid, timestamp: i64 },
+    DeviceOffline { event_id: Uuid, device_id: Uuid, timestamp: i64, partition_id: Uuid },
+    DeviceOnline { event_id: Uuid, device_id: Uuid, timestamp: i64, partition_id: Uuid },
 }
 
 impl ExampleEvent {
@@ -45,6 +50,12 @@ impl ExampleEvent {
     pub fn is_online(&self) -> bool {
         matches!(self, ExampleEvent::DeviceOnline { .. })
     }
+    pub fn partition_id(&self) -> Uuid {
+        match self {
+            ExampleEvent::DeviceOffline { partition_id, .. } => *partition_id,
+            ExampleEvent::DeviceOnline { partition_id, .. } => *partition_id,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -70,6 +81,8 @@ pub struct DeviceStatus {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct SnapshotState {
     devices: HashMap<Uuid, DeviceStatus>,
+    #[serde(default)]
+    store: Option<StoreSnapshot>,
 }
 
 pub type SharedDeviceState = Arc<RwLock<HashMap<Uuid, DeviceStatus>>>;
@@ -87,27 +100,18 @@ where
 
 #[derive(Debug)]
 pub struct ExampleStateMachine {
-    partition_handle: PartitionHandle,
+    store: Store,
     data: StateMachineData,
     snapshot_idx: u64,
     devices: SharedDeviceState,
 }
 
-impl Clone for ExampleStateMachine {
-    fn clone(&self) -> Self {
-        Self {
-            partition_handle: self.partition_handle.clone(),
-            data: self.data.clone(),
-            snapshot_idx: self.snapshot_idx,
-            devices: self.devices.clone(),
-        }
-    }
-}
+// Do not implement Clone for ExampleStateMachine to avoid reopening the store
 
 impl ExampleStateMachine {
-    pub fn new(partition_handle: PartitionHandle, devices: SharedDeviceState) -> Result<Self, StorageError<TvrNodeId>> {
+    pub fn new(store: Store, devices: SharedDeviceState) -> Result<Self, StorageError<TvrNodeId>> {
         let mut sm = Self {
-            partition_handle,
+            store,
             data: StateMachineData {
                 last_applied_log_id: None,
                 last_membership: Default::default(),
@@ -155,18 +159,9 @@ impl ExampleStateMachine {
         atomic_write_json(self.state_file_path(), &snapshot).map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))
     }
 
-    fn append_event(&self, event: &ExampleEvent) -> Result<(), StorageError<TvrNodeId>> {
-        let timestamp = event.timestamp();
-        let order_key = timestamp.max(0) as u64;
-        let mut record = serde_json::to_vec(event).map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
-        record.push(b'\n');
-        self.partition_handle.append(order_key, &record).map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
-        Ok(())
-    }
-
     fn state_file_path(&self) -> std::path::PathBuf {
-        let part_dir = timevault::store::paths::partition_dir(self.partition_handle.root(), self.partition_handle.id());
-        part_dir.join("raft_state.json")
+        let root = self.store.root_path().to_path_buf();
+        root.join("raft_state.json")
     }
 
     fn apply_event(&self, event: &ExampleEvent) -> Result<(), StorageError<TvrNodeId>> {
@@ -183,38 +178,42 @@ impl ExampleStateMachine {
     }
 }
 
-impl RaftSnapshotBuilder<ExampleConfig> for ExampleStateMachine {
-    async fn build_snapshot(&mut self) -> Result<Snapshot<ExampleConfig>, StorageError<TvrNodeId>> {
-        let last_applied_log = self.data.last_applied_log_id;
-        let last_membership = self.data.last_membership.clone();
+#[derive(Clone)]
+pub struct ExampleSnapshotBuilder {
+    store_snapshot: StoreSnapshot,
+    devices: SharedDeviceState,
+    last_applied_log: Option<LogId<TvrNodeId>>,
+    last_membership: StoredMembership<TvrNodeId, TvrNode>,
+    snapshot_idx: u64,
+}
 
-        let snapshot_id = if let Some(last) = last_applied_log {
+impl RaftSnapshotBuilder<ExampleConfig> for ExampleSnapshotBuilder {
+    async fn build_snapshot(&mut self) -> Result<Snapshot<ExampleConfig>, StorageError<TvrNodeId>> {
+        let snapshot_id = if let Some(last) = self.last_applied_log {
             format!("{}-{}-{}", last.leader_id, last.index, self.snapshot_idx)
         } else {
             format!("--{}", self.snapshot_idx)
         };
 
         let meta = SnapshotMeta {
-            last_log_id: last_applied_log,
-            last_membership,
+            last_log_id: self.last_applied_log,
+            last_membership: self.last_membership.clone(),
             snapshot_id,
         };
 
-        let snapshot_state = SnapshotState { devices: self.devices.read().clone() };
-        let data = serde_json::to_vec(&snapshot_state).map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
+        let snapshot_state = SnapshotState {
+            devices: self.devices.read().clone(),
+            store: Some(self.store_snapshot.clone()),
+        };
+        let data = serde_json::to_vec(&snapshot_state)
+            .map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
 
-        let snapshot = StoredSnapshot { meta: meta.clone(), data: data.clone() };
-        self.set_current_snapshot_(snapshot)?;
-
-        Ok(Snapshot {
-            meta,
-            snapshot: Box::new(std::io::Cursor::new(data)),
-        })
+        Ok(Snapshot { meta, snapshot: Box::new(std::io::Cursor::new(data)) })
     }
 }
 
 impl RaftStateMachine<ExampleConfig> for ExampleStateMachine {
-    type SnapshotBuilder = Self;
+    type SnapshotBuilder = ExampleSnapshotBuilder;
 
     async fn applied_state(&mut self) -> Result<(Option<LogId<TvrNodeId>>, StoredMembership<TvrNodeId, TvrNode>), StorageError<TvrNodeId>> {
         Ok((self.data.last_applied_log_id, self.data.last_membership.clone()))
@@ -251,7 +250,16 @@ impl RaftStateMachine<ExampleConfig> for ExampleStateMachine {
 
     async fn get_snapshot_builder(&mut self) -> Self::SnapshotBuilder {
         self.snapshot_idx += 1;
-        self.clone()
+        let store_snapshot = build_store_snapshot_all(&self.store)
+            .map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Read, e))
+            .expect("build store snapshot");
+        ExampleSnapshotBuilder {
+            store_snapshot,
+            devices: self.devices.clone(),
+            last_applied_log: self.data.last_applied_log_id,
+            last_membership: self.data.last_membership.clone(),
+            snapshot_idx: self.snapshot_idx,
+        }
     }
 
     async fn begin_receiving_snapshot(&mut self) -> Result<Box<std::io::Cursor<Vec<u8>>>, StorageError<TvrNodeId>> {
@@ -263,6 +271,37 @@ impl RaftStateMachine<ExampleConfig> for ExampleStateMachine {
             meta: meta.clone(),
             data: snapshot.into_inner(),
         };
+
+        // If snapshot includes a store snapshot, ensure local partitions exist and install data from leader.
+        if let Ok(state) = serde_json::from_slice::<SnapshotState>(&new_snapshot.data) {
+            if let Some(store) = state.store {
+                let store_handle = Store::open(self.store.root_path(), StoreConfig { read_only: false })
+                    .map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
+                ensure_partitions_from_snapshot(&store_handle, &store)
+                    .map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
+                // Perform full Option D: install store snapshot by downloading from leader.
+                if let Some(last) = meta.last_log_id {
+                    let leader_id = last.leader_id.node_id;
+                    // Try to resolve leader address from last_membership
+                    let leader_addr = meta
+                        .last_membership
+                        .membership()
+                        .get_node(&leader_id)
+                        .map(|n| n.addr.clone());
+                    if let Some(addr) = leader_addr {
+                        let base = format!("http://{}", addr);
+                        let transfer = StoreTransferClient::new(base);
+                        // Best-effort install; map errors to StorageError
+                        install_store_snapshot(&store_handle, &transfer, &store)
+                            .map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
+                    } else {
+                        tracing::warn!(leader_id, "could not resolve leader address for snapshot install");
+                    }
+                }
+                // Keep using the same store; partitions will be selected per event.
+                self.store = store_handle;
+            }
+        }
 
         self.update_state_machine_(new_snapshot.clone())?;
         self.set_current_snapshot_(new_snapshot)?;
@@ -282,5 +321,42 @@ impl RaftStateMachine<ExampleConfig> for ExampleStateMachine {
 impl ExampleStateMachine {
     pub fn devices(&self) -> SharedDeviceState {
         self.devices.clone()
+    }
+
+    fn ensure_event_partition(&self, id: Uuid) -> Result<PartitionHandle, StorageError<TvrNodeId>> {
+        match self.store.open_partition(id) {
+            Ok(h) => Ok(h),
+            Err(e) => match e {
+                timevault::errors::TvError::MissingFile { .. } | timevault::errors::TvError::PartitionNotFound(_) => {
+                    let mut cfg = PartitionConfig::default();
+                    cfg.format_plugin = "jsonl".to_string();
+                    let meta = MetadataJson {
+                        partition_id: id,
+                        format_version: cfg.format_version,
+                        format_plugin: cfg.format_plugin.clone(),
+                        chunk_roll: cfg.chunk_roll.clone(),
+                        index: cfg.index.clone(),
+                        retention: cfg.retention.clone(),
+                        key_is_timestamp: cfg.key_is_timestamp,
+                        logical_purge: cfg.logical_purge,
+                        last_purge_id: None,
+                    };
+                    let h = self.store.ensure_partition(&meta).map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
+                    Ok(h)
+                }
+                other => Err(storage_error(ErrorSubject::Store, ErrorVerb::Read, other)),
+            },
+        }
+    }
+
+    fn append_event(&self, event: &ExampleEvent) -> Result<(), StorageError<TvrNodeId>> {
+        let pid = event.partition_id();
+        let handle = self.ensure_event_partition(pid)?;
+        let timestamp = event.timestamp();
+        let order_key = timestamp.max(0) as u64;
+        let mut record = serde_json::to_vec(event).map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
+        record.push(b'\n');
+        handle.append(order_key, &record).map_err(|e| storage_error(ErrorSubject::Store, ErrorVerb::Write, e))?;
+        Ok(())
     }
 }

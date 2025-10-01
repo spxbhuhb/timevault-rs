@@ -19,6 +19,7 @@ use timevault::PartitionHandle;
 use timevault::raft::log::TvrLogAdapter;
 use timevault::raft::{TvrConfig, TvrNodeId};
 use timevault::store::partition::PartitionConfig;
+use timevault::store::{Store, StoreConfig};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -55,20 +56,21 @@ pub async fn start_example_raft_node(node_id: TvrNodeId, root: &str, http_addr: 
     let root = std::path::PathBuf::from(&root);
     std::fs::create_dir_all(&root)?;
 
-    let log_part_id = Uuid::now_v7();
-    let event_part_id = Uuid::now_v7();
-
+    // Deterministic raft log partition ID (Option B): UUID v5 from a fixed namespace and node_id
+    let namespace = Uuid::from_u128(0x9e2e_83b0_b6c2_4c9b_9b3b_4f1e_3a5c_7d11);
+    let log_part_id = Uuid::new_v5(&namespace, format!("raft-log:{node_id}").as_bytes());
     let mut cfg = PartitionConfig::default();
     cfg.format_plugin = "jsonl".to_string();
 
     let log_part = PartitionHandle::create(root.clone(), log_part_id, cfg.clone())?;
-    let event_part = PartitionHandle::create(root.clone(), event_part_id, cfg)?;
 
     // Build storage components using timevault adapters.
     let log_store = ExampleLogStore::new(log_part, node_id);
 
     let devices: SharedDeviceState = new_shared_device_state();
-    let state_machine_store = ExampleStateMachine::new(event_part.clone(), devices.clone())?;
+    // Open a single store instance for the state machine; the App uses only the root path.
+    let store_for_sm = Store::open(&root, StoreConfig { read_only: false })?;
+    let state_machine_store = ExampleStateMachine::new(store_for_sm, devices.clone())?;
 
     // Build openraft Config
     let config = Config {
@@ -96,7 +98,7 @@ pub async fn start_example_raft_node(node_id: TvrNodeId, root: &str, http_addr: 
         addr: http_addr.clone(),
         raft,
         devices,
-        event_partition: event_part,
+        root: root.clone(),
         shutdown: Mutex::new(Some(shutdown_tx)),
     });
 
@@ -122,6 +124,7 @@ pub async fn start_example_raft_node(node_id: TvrNodeId, root: &str, http_addr: 
             .service(api::transfer_manifest)
             .service(api::transfer_chunk)
             .service(api::transfer_index)
+            .service(api::partitions)
             .service(api::shutdown)
         //.service(api::consistent_read)
     });

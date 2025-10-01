@@ -98,12 +98,15 @@ async fn test_cluster_simple() -> anyhow::Result<()> {
     // --- Try to write some application data through the leader.
 
     info!("=== write device online event");
+    // Create a fresh partition for this device events implicitly by writing to it.
+    let partition_id = uuid::Uuid::now_v7();
     let device_id = uuid::Uuid::now_v7();
     let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
     let event = ExampleEvent::DeviceOnline {
         event_id: uuid::Uuid::now_v7(),
         device_id,
         timestamp,
+        partition_id,
     };
     let _x = client.write(&event).await?;
 

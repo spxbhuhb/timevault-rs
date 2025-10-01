@@ -11,10 +11,11 @@ use uuid::Uuid;
 use crate::errors::{Result, TvError};
 use crate::store::Store;
 use crate::store::disk::index::{self, IndexLine};
-use crate::store::disk::manifest::ManifestLine;
-use crate::store::disk::metadata::MetadataJson;
 use crate::store::partition::misc;
 use crate::store::partition::{PartitionHandle, PartitionRuntime};
+use crate::store::paths as store_paths;
+use crate::store::disk::manifest::{load_manifest, ManifestLine};
+use crate::store::disk::metadata::{self, MetadataJson};
 use crate::store::transfer::{DataTransfer, FileDownload, TransferRange};
 
 const MAX_TRANSFER_ATTEMPTS: usize = 3;
@@ -36,6 +37,79 @@ pub struct PartitionSnapshot {
 pub fn install_store_snapshot<T: DataTransfer>(store: &Store, transfer: &T, snapshot: &StoreSnapshot) -> Result<()> {
     for partition_snapshot in &snapshot.partitions {
         install_partition_snapshot(store, transfer, partition_snapshot)?;
+    }
+    Ok(())
+}
+
+/// Build a `PartitionSnapshot` for the given partition handle by inspecting
+/// its on-disk metadata, manifest and index for the last open chunk.
+pub fn build_partition_snapshot(part: &PartitionHandle) -> Result<PartitionSnapshot> {
+    // Resolve paths
+    let part_dir = store_paths::partition_dir(part.root(), part.id());
+    let meta_path = store_paths::partition_metadata(&part_dir);
+    let manifest_path = store_paths::partition_manifest(&part_dir);
+
+    // Load metadata.json
+    let partition_metadata: MetadataJson = metadata::load_metadata(&meta_path)?;
+
+    // Load manifest
+    let manifest: Vec<ManifestLine> = load_manifest(&manifest_path)?;
+    let last_chunk_id = manifest.last().map(|m| m.chunk_id);
+
+    // Determine last_chunk_size and last_order_key
+    let (last_order_key, last_chunk_size) = if let Some(last) = manifest.last() {
+        let chunk_path = store_paths::chunk_file(&store_paths::chunks_dir(&part_dir), last.chunk_id);
+        let size = fs::metadata(&chunk_path).map(|m| m.len()).unwrap_or(0);
+        let last_key = match last.max_order_key {
+            Some(k) => k,
+            None => {
+                // Open chunk: derive from last index block if present, otherwise fallback to min_order_key
+                let index_path = store_paths::index_file(&store_paths::chunks_dir(&part_dir), last.chunk_id);
+                match File::open(&index_path).and_then(|f| index::load_index_lines(&f).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))) {
+                    Ok(lines) => lines.last().map(|l| l.block_max_key).unwrap_or(last.min_order_key),
+                    Err(_) => last.min_order_key,
+                }
+            }
+        };
+        (Some(last_key), size)
+    } else {
+        (None, 0)
+    };
+
+    Ok(PartitionSnapshot {
+        partition_id: part.id(),
+        partition_metadata,
+        last_chunk_id,
+        last_chunk_size,
+        last_order_key,
+    })
+}
+
+/// Build a `StoreSnapshot` for a set of partitions.
+pub fn build_store_snapshot_for_partitions(parts: &[PartitionHandle]) -> Result<StoreSnapshot> {
+    let mut out = Vec::with_capacity(parts.len());
+    for p in parts {
+        out.push(build_partition_snapshot(p)?);
+    }
+    Ok(StoreSnapshot { partitions: out })
+}
+
+/// Build a `StoreSnapshot` for all partitions currently known to the store.
+pub fn build_store_snapshot_all(store: &Store) -> Result<StoreSnapshot> {
+    let ids = store.list_partitions()?;
+    let mut parts = Vec::with_capacity(ids.len());
+    for id in ids {
+        let h = store.open_partition(id)?;
+        parts.push(h);
+    }
+    build_store_snapshot_for_partitions(&parts)
+}
+
+/// Ensure all partitions present in a `StoreSnapshot` exist locally with the
+/// provided metadata. Creates missing partitions when store is not read-only.
+pub fn ensure_partitions_from_snapshot(store: &Store, snapshot: &StoreSnapshot) -> Result<()> {
+    for ps in &snapshot.partitions {
+        let _ = store.ensure_partition(&ps.partition_metadata)?;
     }
     Ok(())
 }

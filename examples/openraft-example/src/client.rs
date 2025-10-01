@@ -16,6 +16,7 @@ use tokio::time::timeout;
 use crate::state::DeviceStatus;
 use crate::typ;
 use crate::{ExampleEvent, TvrNodeId};
+use uuid::Uuid;
 
 pub struct ExampleClient {
     /// The leader node to send request to.
@@ -50,6 +51,11 @@ impl ExampleClient {
     /// Read device statuses from the leader.
     pub async fn read(&self) -> Result<Vec<DeviceStatus>, typ::RPCError> {
         self.do_send_rpc_to_leader("read", None::<&()>).await
+    }
+
+    /// List known partition IDs on the current leader node.
+    pub async fn partitions(&self) -> Result<Vec<Uuid>, typ::RPCError> {
+        self.do_send_rpc_to_leader("partitions", None::<&()>).await
     }
 
     /// Consistent Read value by key, in an inconsistent mode.

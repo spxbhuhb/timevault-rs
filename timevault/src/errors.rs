@@ -25,4 +25,6 @@ pub enum TvError {
     ReadOnly,
     #[error("invalid snapshot: {reason}")]
     InvalidSnapshot { reason: String },
+    #[error("error: {reason}")]
+    Other { reason: String },
 }
