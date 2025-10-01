@@ -136,7 +136,7 @@ fn spawn_node(root: PathBuf, config: NodeConfig) -> NodeHandle {
     });
 
     NodeHandle {
-        id : node_id,
+        id: node_id,
         shutdown: Some(shutdown_tx),
         join: Some(handle),
     }
@@ -167,12 +167,15 @@ async fn run_node(root: PathBuf, config: NodeConfig, shutdown_rx: oneshot::Recei
     let network = Network {};
     let raft = Raft::new(id, config, network, log_store, state_machine_store).await?;
 
+    let (http_shutdown_tx, http_shutdown_rx) = oneshot::channel();
+
     let app_data = Data::new(App {
         id,
         addr: http_addr.clone(),
         raft,
         devices,
         event_partition: event_part,
+        shutdown: parking_lot::Mutex::new(Some(http_shutdown_tx)),
     });
 
     let server = HttpServer::new(move || {
@@ -190,6 +193,7 @@ async fn run_node(root: PathBuf, config: NodeConfig, shutdown_rx: oneshot::Recei
             .service(api::transfer_manifest)
             .service(api::transfer_chunk)
             .service(api::transfer_index)
+            .service(api::shutdown)
     })
     .bind(http_addr.clone())?
     .run();
@@ -202,10 +206,12 @@ async fn run_node(root: PathBuf, config: NodeConfig, shutdown_rx: oneshot::Recei
             res?;
             Ok(())
         }
-        _ = async {
-            let _ = shutdown_rx.await;
-        } => {
-            handle.stop(true).await;
+        _ = shutdown_rx => {
+            let _ = handle.stop(false);
+            Ok(())
+        }
+        _ = http_shutdown_rx => {
+            let _ = handle.stop(false);
             Ok(())
         }
     }

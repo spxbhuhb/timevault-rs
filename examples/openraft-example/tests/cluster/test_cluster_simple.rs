@@ -1,11 +1,10 @@
 use std::backtrace::Backtrace;
 use std::collections::BTreeMap;
+use std::net::TcpListener;
 #[allow(deprecated)]
 use std::panic::PanicInfo;
-use std::thread;
 use std::time::Duration;
 
-use maplit::btreemap;
 use maplit::btreeset;
 use openraft::BasicNode;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -13,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use openraft_example::client::ExampleClient;
 use openraft_example::start_example_raft_node;
 use openraft_example::state::{DeviceStatus, ExampleEvent};
-use tokio::runtime::Runtime;
+use reqwest::Client;
 use tracing_subscriber::EnvFilter;
 
 #[allow(deprecated)]
@@ -51,7 +50,6 @@ pub fn log_panic(panic: &PanicInfo) {
 
 /// Setup a cluster of 3 nodes.
 /// Write to it and read from it.
-#[ignore]
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_cluster_simple() -> anyhow::Result<()> {
     // --- The client itself does not store addresses for all nodes, but just node id.
@@ -80,37 +78,38 @@ async fn test_cluster_simple() -> anyhow::Result<()> {
     let _ = std::fs::remove_dir_all(root);
     std::fs::create_dir_all(root)?;
 
+    let node_addrs: BTreeMap<u64, String> = [1_u64, 2, 3]
+        .into_iter()
+        .map(|node_id| {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .unwrap_or_else(|err| panic!("failed to allocate port for node {node_id}: {err}"));
+            let port = listener
+                .local_addr()
+                .unwrap_or_else(|err| panic!("failed to read local addr for node {node_id}: {err}"))
+                .port();
+            drop(listener);
+            (node_id, format!("127.0.0.1:{port}"))
+        })
+        .collect();
+
     let get_addr = |node_id| {
-        let addr = match node_id {
-            1 => "127.0.0.1:21001".to_string(),
-            2 => "127.0.0.1:21002".to_string(),
-            3 => "127.0.0.1:21003".to_string(),
-            _ => {
-                return Err(anyhow::anyhow!("node {} not found", node_id));
-            }
-        };
-        Ok(addr)
+        node_addrs
+            .get(&node_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("node {} not found", node_id))
     };
 
-    // --- Start 3 raft node in 3 threads.
+    // --- Start 3 raft nodes in 3 threads.
 
-    let _h1 = thread::spawn(|| {
-        let rt = Runtime::new().unwrap();
-        let x = rt.block_on(start_example_raft_node(1, root, "127.0.0.1:21001".to_string()));
-        println!("x: {:?}", x);
-    });
-
-    let _h2 = thread::spawn(|| {
-        let rt = Runtime::new().unwrap();
-        let x = rt.block_on(start_example_raft_node(2, root, "127.0.0.1:21002".to_string()));
-        println!("x: {:?}", x);
-    });
-
-    let _h3 = thread::spawn(|| {
-        let rt = Runtime::new().unwrap();
-        let x = rt.block_on(start_example_raft_node(3, root, "127.0.0.1:21003".to_string()));
-        println!("x: {:?}", x);
-    });
+    let mut node_handles = Vec::new();
+    for (&node_id, addr) in &node_addrs {
+        let addr = addr.clone();
+        node_handles.push(tokio::spawn(async move {
+            if let Err(err) = start_example_raft_node(node_id, root, addr).await {
+                panic!("node {node_id} failed: {err:?}");
+            }
+        }));
+    }
 
     // Wait for server to start up.
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -143,14 +142,12 @@ async fn test_cluster_simple() -> anyhow::Result<()> {
     assert_eq!(&vec![btreeset![1]], x.membership_config.membership().get_joint_config());
 
     let nodes_in_cluster = x.membership_config.nodes().map(|(nid, node)| (*nid, node.clone())).collect::<BTreeMap<_, _>>();
-    assert_eq!(
-        btreemap! {
-            1 => BasicNode::new("127.0.0.1:21001"),
-            2 => BasicNode::new("127.0.0.1:21002"),
-            3 => BasicNode::new("127.0.0.1:21003"),
-        },
-        nodes_in_cluster
-    );
+    let expected_nodes = node_addrs
+        .iter()
+        .map(|(node_id, addr)| (*node_id, BasicNode::new(addr.clone())))
+        .collect::<BTreeMap<_, _>>();
+
+    assert_eq!(expected_nodes, nodes_in_cluster);
 
     // --- 3. Turn the two learners to members. A member node can vote or elect itself as leader.
 
@@ -218,6 +215,21 @@ async fn test_cluster_simple() -> anyhow::Result<()> {
     println!("=== metrics after change-membership to {{3}}");
     let x = client.metrics().await?;
     assert_eq!(&vec![btreeset![3]], x.membership_config.membership().get_joint_config());
+
+    let shutdown_client = Client::new();
+    for node_id in [1_u64, 2, 3] {
+        let addr = get_addr(node_id)?;
+        let url = format!("http://{}/shutdown", addr);
+        let response = shutdown_client.post(url).send().await?;
+        response.error_for_status()?;
+    }
+
+    for handle in node_handles {
+        let join_result = tokio::time::timeout(Duration::from_secs(10), handle)
+            .await
+            .map_err(|_| anyhow::anyhow!("node task did not shutdown in time"))?;
+        join_result.expect("node task should shutdown cleanly");
+    }
 
     Ok(())
 }
