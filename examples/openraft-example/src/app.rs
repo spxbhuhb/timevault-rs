@@ -2,11 +2,13 @@ use crate::PartitionHandle;
 use crate::Raft;
 use crate::TvrNodeId;
 use crate::state::{DeviceStatus, SharedDeviceState};
+use parking_lot::Mutex;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use timevault::errors::{Result as TvResult, TvError};
 use timevault::store::paths;
 use timevault::store::transfer::{DataTransfer, FileDownload, ManifestDownload, TransferRange};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 // Representation of an application state. This struct can be shared around to share
@@ -17,11 +19,16 @@ pub struct App {
     pub raft: Raft,
     pub devices: SharedDeviceState,
     pub event_partition: PartitionHandle,
+    pub shutdown: Mutex<Option<oneshot::Sender<()>>>,
 }
 
 impl App {
     pub fn snapshot_devices(&self) -> Vec<DeviceStatus> {
         self.devices.read().values().cloned().collect()
+    }
+
+    pub fn take_shutdown_signal(&self) -> Option<oneshot::Sender<()>> {
+        self.shutdown.lock().take()
     }
 
     fn ensure_partition(&self, partition: Uuid) -> TvResult<()> {

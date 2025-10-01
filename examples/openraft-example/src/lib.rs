@@ -14,10 +14,12 @@ use actix_web::middleware;
 use actix_web::middleware::Logger;
 use actix_web::web::Data;
 use openraft::Config;
+use parking_lot::Mutex;
 use timevault::PartitionHandle;
 use timevault::raft::log::TvrLogAdapter;
 use timevault::raft::{TvrConfig, TvrNodeId};
 use timevault::store::partition::PartitionConfig;
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 pub mod app;
@@ -84,6 +86,8 @@ pub async fn start_example_raft_node(node_id: TvrNodeId, root: &str, http_addr: 
     // Create a local raft instance.
     let raft = Raft::new(node_id, config, network, log_store, state_machine_store).await?;
 
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
     // Create an application that will store all the instances created above, this will
     // later be used on the actix-web services.
     let app_data = Data::new(App {
@@ -92,6 +96,7 @@ pub async fn start_example_raft_node(node_id: TvrNodeId, root: &str, http_addr: 
         raft,
         devices,
         event_partition: event_part,
+        shutdown: Mutex::new(Some(shutdown_tx)),
     });
 
     // Start the actix-web server.
@@ -116,11 +121,24 @@ pub async fn start_example_raft_node(node_id: TvrNodeId, root: &str, http_addr: 
             .service(api::transfer_manifest)
             .service(api::transfer_chunk)
             .service(api::transfer_index)
+            .service(api::shutdown)
         //.service(api::consistent_read)
     });
 
-    let x = server.bind(http_addr)?;
+    let server = server.bind(http_addr)?.run();
+    let handle = server.handle();
+    tokio::pin!(server);
 
-    x.run().await.expect("run failed");
-    Ok(())
+    tokio::select! {
+        res = &mut server => {
+            res?;
+            Ok(())
+        }
+        _ = shutdown_rx => {
+            tracing::info!(node_id, "shutdown signal received");
+            let _ = handle.stop(false);
+            tracing::info!(node_id, "actix stop requested");
+            Ok(())
+        }
+    }
 }

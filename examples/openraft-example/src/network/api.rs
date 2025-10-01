@@ -1,5 +1,5 @@
 use actix_web::web::{Data, Json, Path, Query};
-use actix_web::{Responder, get, post};
+use actix_web::{HttpResponse, Responder, get, post};
 use serde::Deserialize;
 use serde::Serialize;
 use timevault::store::transfer::{DataTransfer, FileDownload, ManifestDownload, TransferRange};
@@ -96,6 +96,20 @@ pub async fn transfer_index(app: Data<App>, path: Path<(Uuid, u64)>, query: Quer
     let range = TransferRange { start: query.start, end: query.end };
     let download = app.download_index(partition, chunk_id, range).map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(Json(FileResponse::from(download)))
+}
+
+#[post("/shutdown")]
+pub async fn shutdown(app: Data<App>) -> actix_web::Result<impl Responder> {
+    let shutdown_signal = app.take_shutdown_signal();
+    let raft_result = app.raft.shutdown().await;
+
+    if let Some(tx) = shutdown_signal {
+        let _ = tx.send(());
+    }
+
+    raft_result.map_err(actix_web::error::ErrorInternalServerError)?;
+
+    Ok(HttpResponse::Ok().finish())
 }
 //
 // #[post("/consistent_read")]
