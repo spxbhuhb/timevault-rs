@@ -1,5 +1,5 @@
 use maplit::btreeset;
-use openraft_example::state::{DeviceStatus, ExampleEvent};
+use openraft_example::domain::{DeviceStatus, AppEvent};
 use std::collections::HashMap;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -46,14 +46,14 @@ async fn test_cluster_restart() -> anyhow::Result<()> {
         let timestamp = base_timestamp + idx;
         let is_online = idx % 3 != 0;
         let event = if is_online {
-            ExampleEvent::DeviceOnline {
+            AppEvent::DeviceOnline {
                 event_id,
                 device_id: device,
                 timestamp,
                 partition_id,
             }
         } else {
-            ExampleEvent::DeviceOffline {
+            AppEvent::DeviceOffline {
                 event_id,
                 device_id: device,
                 timestamp,
@@ -86,7 +86,7 @@ async fn test_cluster_restart() -> anyhow::Result<()> {
         assert_eq!(found.last_timestamp, expected.last_timestamp);
     }
 
-    let verification_event = ExampleEvent::DeviceOnline {
+    let verification_event = AppEvent::DeviceOnline {
         event_id: Uuid::now_v7(),
         device_id: device_ids[0],
         timestamp: base_timestamp + total_events + 1,
@@ -94,7 +94,7 @@ async fn test_cluster_restart() -> anyhow::Result<()> {
     };
     client.write(&verification_event).await?;
     let (verification_event_id, verification_timestamp) = match &verification_event {
-        ExampleEvent::DeviceOnline { event_id, timestamp, .. } | ExampleEvent::DeviceOffline { event_id, timestamp, .. } => (*event_id, *timestamp),
+        AppEvent::DeviceOnline { event_id, timestamp, .. } | AppEvent::DeviceOffline { event_id, timestamp, .. } => (*event_id, *timestamp),
     };
     expected_statuses.insert(
         device_ids[0],
@@ -137,7 +137,7 @@ async fn test_cluster_restart() -> anyhow::Result<()> {
 
     // Basic operation check after restart
     let device_after = Uuid::now_v7();
-    let event_after = ExampleEvent::DeviceOnline {
+    let event_after = AppEvent::DeviceOnline {
         event_id: Uuid::now_v7(),
         device_id: device_after,
         timestamp: base_timestamp + total_events + 2,

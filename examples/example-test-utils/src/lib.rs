@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use openraft::LogId;
-use openraft_example::client::ExampleClient;
-use openraft_example::start_example_raft_node;
+use openraft_example::client::AppClient;
+use openraft_example::start_app_node;
 use reqwest::Client as HttpClient;
 use timevault::raft::TvrNodeId;
 use tokio::task::JoinHandle;
@@ -98,7 +98,7 @@ pub async fn spawn_nodes(root: &PathBuf, node_addrs: &BTreeMap<u64, String>) -> 
         let node_root = root.join(format!("node-{node_id}"));
         let node_root = node_root.to_string_lossy().to_string();
         handles.push(tokio::spawn(async move {
-            if let Err(err) = start_example_raft_node(node_id, &node_root, addr).await {
+            if let Err(err) = start_app_node(node_id, &node_root, addr).await {
                 panic!("node {node_id} failed: {err:?}");
             }
         }));
@@ -123,9 +123,9 @@ pub async fn shutdown_nodes(node_addrs: &BTreeMap<u64, String>, handles: Vec<Joi
 }
 
 /// Build an ExampleClient for the given leader id using the provided address map.
-pub fn client_for(node_addrs: &BTreeMap<u64, String>, leader_id: u64) -> anyhow::Result<ExampleClient> {
+pub fn client_for(node_addrs: &BTreeMap<u64, String>, leader_id: u64) -> anyhow::Result<AppClient> {
     let addr = get_addr(node_addrs, leader_id)?;
-    Ok(ExampleClient::new(leader_id, addr))
+    Ok(AppClient::new(leader_id, addr))
 }
 
 /// Send shutdown to a single node and await its task completion.
@@ -143,7 +143,7 @@ pub async fn shutdown_node(node_id: u64, addr: &str, handle: JoinHandle<()>) -> 
 pub async fn wait_for_http_ready(node_addrs: &BTreeMap<u64, String>, timeout: Duration) -> anyhow::Result<()> {
     let client = HttpClient::new();
     for (&node_id, addr) in node_addrs {
-        let url = format!("http://{}/metrics", addr);
+        let url = format!("http://{}/ready", addr);
         let deadline = Instant::now() + timeout;
         let mut last_err: Option<String>;
 
@@ -170,7 +170,7 @@ pub async fn wait_for_http_ready(node_addrs: &BTreeMap<u64, String>, timeout: Du
 }
 
 /// Poll metrics until a leader is present or timeout occurs.
-pub async fn wait_for_leader(client: &ExampleClient, timeout: Duration) -> anyhow::Result<TvrNodeId> {
+pub async fn wait_for_leader(client: &AppClient, timeout: Duration) -> anyhow::Result<TvrNodeId> {
     let deadline = Instant::now() + timeout;
     loop {
         if let Ok(metrics) = client.metrics().await {
@@ -188,7 +188,7 @@ pub async fn wait_for_leader(client: &ExampleClient, timeout: Duration) -> anyho
 }
 
 /// Poll metrics until a snapshot with at least `min_index` is observed or timeout occurs.
-pub async fn wait_for_snapshot(client: &ExampleClient, min_index: u64, timeout: Duration) -> anyhow::Result<LogId<TvrNodeId>> {
+pub async fn wait_for_snapshot(client: &AppClient, min_index: u64, timeout: Duration) -> anyhow::Result<LogId<TvrNodeId>> {
     let deadline = Instant::now() + timeout;
     loop {
         let metrics = client.metrics().await?;

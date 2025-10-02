@@ -13,12 +13,12 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::time::timeout;
 
-use crate::state::DeviceStatus;
+use crate::domain::DeviceStatus;
 use crate::typ;
-use crate::{ExampleEvent, TvrNodeId};
+use crate::{domain::AppEvent, TvrNodeId};
 use uuid::Uuid;
 
-pub struct ExampleClient {
+pub struct AppClient {
     /// The leader node to send request to.
     ///
     /// All traffic should be sent to the leader in a cluster.
@@ -27,7 +27,7 @@ pub struct ExampleClient {
     pub inner: reqwest::Client,
 }
 
-impl ExampleClient {
+impl AppClient {
     /// Create a client with a leader node id and a node manager to get node address by node id.
     pub fn new(leader_id: TvrNodeId, leader_addr: String) -> Self {
         Self {
@@ -44,7 +44,7 @@ impl ExampleClient {
     /// will be applied to state machine.
     ///
     /// The result of applying the request will be returned.
-    pub async fn write(&self, req: &ExampleEvent) -> Result<typ::ClientWriteResponse, typ::RPCError<typ::ClientWriteError>> {
+    pub async fn write(&self, req: &AppEvent) -> Result<typ::ClientWriteResponse, typ::RPCError<typ::ClientWriteError>> {
         self.send_rpc_to_leader("write", Some(req)).await
     }
 

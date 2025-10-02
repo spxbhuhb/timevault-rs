@@ -1,5 +1,5 @@
 use maplit::btreeset;
-use openraft_example::state::{DeviceStatus, ExampleEvent};
+use openraft_example::domain::{DeviceStatus, AppEvent};
 use std::collections::HashMap;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -46,14 +46,14 @@ async fn test_cluster_stress() -> anyhow::Result<()> {
         let timestamp = base_timestamp + idx;
         let is_online = idx % 3 != 0;
         let event = if is_online {
-            ExampleEvent::DeviceOnline {
+            AppEvent::DeviceOnline {
                 event_id,
                 device_id: device,
                 timestamp,
                 partition_id,
             }
         } else {
-            ExampleEvent::DeviceOffline {
+            AppEvent::DeviceOffline {
                 event_id,
                 device_id: device,
                 timestamp,
@@ -86,7 +86,7 @@ async fn test_cluster_stress() -> anyhow::Result<()> {
         assert_eq!(found.last_timestamp, expected.last_timestamp);
     }
 
-    let verification_event = ExampleEvent::DeviceOnline {
+    let verification_event = AppEvent::DeviceOnline {
         event_id: Uuid::now_v7(),
         device_id: device_ids[0],
         timestamp: base_timestamp + total_events + 1,

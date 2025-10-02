@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use maplit::btreeset;
 use openraft::BasicNode;
-use openraft_example::client::ExampleClient;
-use openraft_example::state::{DeviceStatus, ExampleEvent};
+use openraft_example::client::AppClient;
+use openraft_example::domain::{DeviceStatus, AppEvent};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::info;
 
@@ -97,7 +97,7 @@ async fn test_cluster_simple() -> anyhow::Result<()> {
     let partition_id = uuid::Uuid::now_v7();
     let device_id = uuid::Uuid::now_v7();
     let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
-    let event = ExampleEvent::DeviceOnline {
+    let event = AppEvent::DeviceOnline {
         event_id: uuid::Uuid::now_v7(),
         device_id,
         timestamp,
@@ -116,12 +116,12 @@ async fn test_cluster_simple() -> anyhow::Result<()> {
     assert!(statuses.iter().any(|s: &DeviceStatus| s.device_id == device_id && s.is_online));
 
     info!("=== read statuses on node 2");
-    let client2 = ExampleClient::new(2, get_addr(2)?);
+    let client2 = AppClient::new(2, get_addr(2)?);
     let statuses = client2.read().await?;
     assert!(statuses.iter().any(|s: &DeviceStatus| s.device_id == device_id && s.is_online));
 
     info!("=== read statuses on node 3");
-    let client3 = ExampleClient::new(3, get_addr(3)?);
+    let client3 = AppClient::new(3, get_addr(3)?);
     let statuses = client3.read().await?;
     assert!(statuses.iter().any(|s: &DeviceStatus| s.device_id == device_id && s.is_online));
 

@@ -1,7 +1,7 @@
 use maplit::btreeset;
-use openraft_example::client::ExampleClient;
-use openraft_example::start_example_raft_node;
-use openraft_example::state::{DeviceStatus, ExampleEvent};
+use openraft_example::client::AppClient;
+use openraft_example::start_app_node;
+use openraft_example::domain::{DeviceStatus, AppEvent};
 use std::collections::BTreeMap;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -32,7 +32,7 @@ async fn test_cluster_follower_replacement() -> anyhow::Result<()> {
 
     let partition_id = Uuid::now_v7();
     let base_timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
-    let first_event = ExampleEvent::DeviceOnline {
+    let first_event = AppEvent::DeviceOnline {
         event_id: Uuid::now_v7(),
         device_id: Uuid::now_v7(),
         timestamp: base_timestamp,
@@ -59,7 +59,7 @@ async fn test_cluster_follower_replacement() -> anyhow::Result<()> {
     let node_root_str = node_root.to_string_lossy().to_string();
     let addr_for_task = new_addr.clone();
     let handle4 = tokio::spawn(async move {
-        if let Err(err) = start_example_raft_node(4, &node_root_str, addr_for_task).await {
+        if let Err(err) = start_app_node(4, &node_root_str, addr_for_task).await {
             panic!("node 4 failed: {err:?}");
         }
     });
@@ -76,7 +76,7 @@ async fn test_cluster_follower_replacement() -> anyhow::Result<()> {
     wait_for_leader(&client, Duration::from_secs(10)).await?;
 
     // Write another event and ensure the new follower sees it.
-    let replacement_event = ExampleEvent::DeviceOffline {
+    let replacement_event = AppEvent::DeviceOffline {
         event_id: Uuid::now_v7(),
         device_id: Uuid::now_v7(),
         timestamp: base_timestamp + 1,
@@ -84,7 +84,7 @@ async fn test_cluster_follower_replacement() -> anyhow::Result<()> {
     };
     client.write(&replacement_event).await?;
 
-    let statuses = ExampleClient::new(4, get_addr(&node_addrs, 4)?).read().await?;
+    let statuses = AppClient::new(4, get_addr(&node_addrs, 4)?).read().await?;
     assert!(
         statuses
             .iter()

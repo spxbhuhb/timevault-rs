@@ -1,5 +1,5 @@
 use clap::Parser;
-use openraft_example::start_example_raft_node;
+use openraft_example::start_app_node;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Clone, Debug)]
@@ -26,5 +26,5 @@ async fn main() -> anyhow::Result<()> {
     // Parse the parameters passed by arguments.
     let options = Opt::parse();
 
-    start_example_raft_node(options.id, "./var", options.http_addr).await
+    start_app_node(options.id, "./var", options.http_addr).await
 }

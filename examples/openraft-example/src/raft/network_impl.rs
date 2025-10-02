@@ -12,12 +12,12 @@ use openraft::raft::InstallSnapshotRequest;
 use openraft::raft::InstallSnapshotResponse;
 use openraft::raft::VoteRequest;
 use openraft::raft::VoteResponse;
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 
-use crate::ExampleConfig;
-use crate::TvrNodeId;
+use crate::raft::AppConfig;
 use crate::typ;
+use crate::TvrNodeId;
 
 pub struct Network {}
 
@@ -37,8 +37,6 @@ impl Network {
         tracing::debug!("client is created for: {}", url);
 
         let resp = client.post(url).json(&req).send().await.map_err(|e| {
-            // If the error is a connection error, we return `Unreachable` so that connection isn't retried
-            // immediately.
             if e.is_connect() {
                 return openraft::error::RPCError::Unreachable(Unreachable::new(&e));
             }
@@ -53,9 +51,7 @@ impl Network {
     }
 }
 
-// NOTE: This could be implemented also on `Arc<ExampleNetwork>`, but since it's empty, implemented
-// directly.
-impl RaftNetworkFactory<ExampleConfig> for Network {
+impl RaftNetworkFactory<AppConfig> for Network {
     type Network = NetworkConnection;
 
     async fn new_client(&mut self, target: TvrNodeId, node: &BasicNode) -> Self::Network {
@@ -73,12 +69,12 @@ pub struct NetworkConnection {
     target_node: BasicNode,
 }
 
-impl RaftNetwork<ExampleConfig> for NetworkConnection {
-    async fn append_entries(&mut self, req: AppendEntriesRequest<ExampleConfig>, _option: RPCOption) -> Result<AppendEntriesResponse<TvrNodeId>, typ::RPCError> {
+impl RaftNetwork<AppConfig> for NetworkConnection {
+    async fn append_entries(&mut self, req: AppendEntriesRequest<AppConfig>, _option: RPCOption) -> Result<AppendEntriesResponse<TvrNodeId>, typ::RPCError> {
         self.owner.send_rpc(self.target, &self.target_node, "raft-append", req).await
     }
 
-    async fn install_snapshot(&mut self, req: InstallSnapshotRequest<ExampleConfig>, _option: RPCOption) -> Result<InstallSnapshotResponse<TvrNodeId>, typ::RPCError<InstallSnapshotError>> {
+    async fn install_snapshot(&mut self, req: InstallSnapshotRequest<AppConfig>, _option: RPCOption) -> Result<InstallSnapshotResponse<TvrNodeId>, typ::RPCError<InstallSnapshotError>> {
         self.owner.send_rpc(self.target, &self.target_node, "raft-snapshot", req).await
     }
 
@@ -86,3 +82,4 @@ impl RaftNetwork<ExampleConfig> for NetworkConnection {
         self.owner.send_rpc(self.target, &self.target_node, "raft-vote", req).await
     }
 }
+
