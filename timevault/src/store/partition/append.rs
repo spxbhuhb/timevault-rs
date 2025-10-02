@@ -13,6 +13,19 @@ pub fn append(h: &PartitionHandle, order_key: u64, payload: &[u8]) -> Result<cra
 
     let offset = {
         let mut rt = h.inner.runtime.write();
+        // Idempotency guard: if the incoming record has the same key as the current
+        // chunk's max key and the payload is identical to the last appended record,
+        // skip appending. This avoids duplicating the tail record during replays.
+        if rt.cur_chunk_id.is_some()
+            && order_key == rt.cur_chunk_max_order_key
+            && rt
+                .cur_last_record_bytes
+                .as_ref()
+                .map(|b| b.as_slice() == payload)
+                .unwrap_or(false)
+        {
+            return Ok(crate::store::partition::AppendAck { offset: rt.cur_chunk_size_bytes });
+        }
         if ensure_ordering(&rt, order_key)?.is_none() {
             return Ok(crate::store::partition::AppendAck { offset: rt.cur_chunk_size_bytes });
         }

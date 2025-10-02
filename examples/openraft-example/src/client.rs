@@ -48,9 +48,10 @@ impl ExampleClient {
         self.send_rpc_to_leader("write", Some(req)).await
     }
 
-    /// Read device statuses from the leader.
-    pub async fn read(&self) -> Result<Vec<DeviceStatus>, typ::RPCError> {
-        self.do_send_rpc_to_leader("read", None::<&()>).await
+    /// Read device statuses with linearizability and leader auto-forward.
+    pub async fn read(&self) -> Result<Vec<DeviceStatus>, typ::RPCError<typ::CheckIsLeaderError>> {
+        // Use leader-aware retry to follow ForwardToLeader advice returned by `/read`.
+        self.send_rpc_to_leader::<(), Vec<DeviceStatus>, typ::CheckIsLeaderError>("read", None::<&()>).await
     }
 
     /// List known partition IDs on the current leader node.

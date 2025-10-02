@@ -17,8 +17,15 @@ pub async fn write(app: Data<App>, req: Json<ExampleEvent>) -> actix_web::Result
 
 #[get("/read")]
 pub async fn read(app: Data<App>) -> actix_web::Result<impl Responder> {
-    let devices: Vec<DeviceStatus> = app.snapshot_devices();
-    Ok(Json(Ok::<_, crate::typ::RaftError>(devices)))
+    // Ensure linearizable read: only the leader should serve reads and only after
+    // establishing a linearizable barrier. If not leader, return a CheckIsLeaderError
+    // so clients can forward to the leader.
+    let ret = app.raft.ensure_linearizable().await;
+    let res: Result<Vec<DeviceStatus>, crate::typ::RaftError<crate::typ::CheckIsLeaderError>> = match ret {
+        Ok(_) => Ok(app.snapshot_devices()),
+        Err(e) => Err(e),
+    };
+    Ok(Json(res))
 }
 
 #[get("/partitions")]

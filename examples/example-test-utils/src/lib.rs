@@ -145,7 +145,7 @@ pub async fn wait_for_http_ready(node_addrs: &BTreeMap<u64, String>, timeout: Du
     for (&node_id, addr) in node_addrs {
         let url = format!("http://{}/metrics", addr);
         let deadline = Instant::now() + timeout;
-        let mut last_err: Option<String> = None;
+        let mut last_err: Option<String>;
 
         loop {
             match client.get(&url).send().await {
@@ -171,7 +171,7 @@ pub async fn wait_for_http_ready(node_addrs: &BTreeMap<u64, String>, timeout: Du
 
 /// Poll metrics until a leader is present or timeout occurs.
 pub async fn wait_for_leader(client: &ExampleClient, timeout: Duration) -> anyhow::Result<TvrNodeId> {
-    let deadline = std::time::Instant::now() + timeout;
+    let deadline = Instant::now() + timeout;
     loop {
         if let Ok(metrics) = client.metrics().await {
             if let Some(leader) = metrics.current_leader {
@@ -179,7 +179,7 @@ pub async fn wait_for_leader(client: &ExampleClient, timeout: Duration) -> anyho
             }
         }
 
-        if std::time::Instant::now() >= deadline {
+        if Instant::now() >= deadline {
             anyhow::bail!("timed out waiting for leader");
         }
 
@@ -189,7 +189,7 @@ pub async fn wait_for_leader(client: &ExampleClient, timeout: Duration) -> anyho
 
 /// Poll metrics until a snapshot with at least `min_index` is observed or timeout occurs.
 pub async fn wait_for_snapshot(client: &ExampleClient, min_index: u64, timeout: Duration) -> anyhow::Result<LogId<TvrNodeId>> {
-    let deadline = std::time::Instant::now() + timeout;
+    let deadline = Instant::now() + timeout;
     loop {
         let metrics = client.metrics().await?;
         if let Some(snapshot) = metrics.snapshot {
@@ -198,7 +198,7 @@ pub async fn wait_for_snapshot(client: &ExampleClient, min_index: u64, timeout: 
             }
         }
 
-        if std::time::Instant::now() >= deadline {
+        if Instant::now() >= deadline {
             anyhow::bail!("timed out waiting for snapshot; last snapshot: {:?}", metrics.snapshot);
         }
 

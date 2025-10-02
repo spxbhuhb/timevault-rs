@@ -3,6 +3,7 @@ use openraft_example::state::{DeviceStatus, ExampleEvent};
 use std::collections::HashMap;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::info;
 use uuid::Uuid;
 
 use example_test_utils::{
@@ -116,11 +117,11 @@ async fn test_cluster_restart() -> anyhow::Result<()> {
 
     let client = client_for(&node_addrs, 1)?;
     let leader = wait_for_leader(&client, Duration::from_secs(10)).await?;
-    tracing::info!(leader, "leader detected after restart");
+    info!(leader, "leader detected after restart");
 
     // The cluster should retain its membership configuration from the previous run.
     let metrics_after = client.metrics().await?;
-    tracing::info!(?metrics_after, "metrics after restart");
+    info!(?metrics_after, "metrics after restart");
     assert_eq!(&vec![btreeset![1, 2, 3]], metrics_after.membership_config.membership().get_joint_config());
 
     // Existing replicated state should still be readable.
