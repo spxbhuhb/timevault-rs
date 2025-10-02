@@ -10,6 +10,9 @@ pub struct Opt {
 
     #[clap(long, default_value = "127.0.0.1:21000")]
     pub http_addr: String,
+
+    #[clap(long, default_value = "./var")]
+    pub data_root: String,
 }
 
 #[actix_web::main]
@@ -26,5 +29,5 @@ async fn main() -> anyhow::Result<()> {
     // Parse the parameters passed by arguments.
     let options = Opt::parse();
 
-    start_app_node(options.id, "./var", options.http_addr, None).await
+    start_app_node(options.id, &options.data_root, options.http_addr, None).await
 }

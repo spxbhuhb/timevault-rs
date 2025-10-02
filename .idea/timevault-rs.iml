@@ -8,6 +8,7 @@
       <sourceFolder url="file://$MODULE_DIR$/timevault/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/examples/openraft-example/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/examples/example-test-utils/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/chaos-runner/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

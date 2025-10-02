@@ -1,0 +1,19 @@
+[package]
+name = "chaos-runner"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+long-running-test = []
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time"] }
+reqwest = { version = "0.12", features = ["json"] }
+rand = "0.8"
+parking_lot = "0.12"
+uuid = { version = "1", features = ["v7", "serde"] }
+nix = { version = "0.29", default-features = false, features = ["signal"] }
+openraft-example = { path = "../examples/openraft-example" }
+
