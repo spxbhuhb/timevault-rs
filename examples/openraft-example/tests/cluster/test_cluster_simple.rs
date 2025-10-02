@@ -8,7 +8,7 @@ use openraft_example::domain::{DeviceStatus, AppEvent};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::info;
 
-use example_test_utils::{allocate_node_addrs, client_for, init_tracing, set_panic_hook, shutdown_nodes, spawn_nodes, unique_test_root, wait_for_http_ready};
+use example_test_utils::{allocate_node_addrs, client_for, init_tracing, set_panic_hook, shutdown_nodes, spawn_nodes_with_policy, unique_test_root, wait_for_http_ready};
 
 /// Setup a cluster of 3 nodes.
 /// Write to it and read from it.
@@ -31,7 +31,7 @@ async fn test_cluster_simple() -> anyhow::Result<()> {
     let get_addr = |node_id| example_test_utils::get_addr(&node_addrs, node_id);
 
     // --- Start 3 raft nodes in 3 threads.
-    let node_handles = spawn_nodes(&root, &node_addrs).await;
+    let node_handles = spawn_nodes_with_policy(&root, &node_addrs, Some(40)).await;
     wait_for_http_ready(&node_addrs, Duration::from_secs(5)).await?;
 
     // --- Create a client to the first node, as a control handle to the cluster.

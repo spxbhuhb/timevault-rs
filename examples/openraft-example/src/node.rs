@@ -14,7 +14,7 @@ use crate::raft::{self, Raft};
 use crate::state_machine::{AppStateMachine, SharedDeviceState, new_shared_device_state};
 use crate::storage::{open_or_create_log_store, open_state_store};
 
-pub async fn start_app_node(node_id: TvrNodeId, root: &str, http_addr: String) -> anyhow::Result<()> {
+pub async fn start_app_node(node_id: TvrNodeId, root: &str, http_addr: String, logs_since_last_override: Option<u64>) -> anyhow::Result<()> {
     // Prepare storage roots
     let root = std::path::PathBuf::from(&root);
     std::fs::create_dir_all(&root)?;
@@ -26,18 +26,24 @@ pub async fn start_app_node(node_id: TvrNodeId, root: &str, http_addr: String) -
     let store_for_sm = open_state_store(&root)?;
     let state_machine_store = AppStateMachine::new(store_for_sm, devices.clone())?;
 
-    // Build openraft Config
+    // Build openraft Config; snapshot policy configurable via arg or env
+    // Env: OPENRAFT_SNAPSHOT_LOGS_SINCE_LAST (default: 40)
+    let logs_since_last = logs_since_last_override
+        .or_else(|| std::env::var("OPENRAFT_SNAPSHOT_LOGS_SINCE_LAST").ok().and_then(|v| v.parse::<u64>().ok()));
     let config = Config {
         heartbeat_interval: 500,
         election_timeout_min: 1500,
         election_timeout_max: 3000,
-        snapshot_policy: SnapshotPolicy::LogsSinceLast(40),
+        snapshot_policy: match logs_since_last {
+            Some(v) => SnapshotPolicy::LogsSinceLast(v),
+            None => SnapshotPolicy::Never,
+        },
         ..Default::default()
     };
     let config = Arc::new(config.validate()?);
 
     // Create the network layer
-    let network = raft::network_impl::Network {};
+    let network = raft::network_impl::Network::new();
 
     // Create a local raft instance.
     let raft = Raft::new(node_id, config, network, log_store, state_machine_store).await?;

@@ -7,7 +7,7 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-use example_test_utils::{allocate_node_addrs, client_for, get_addr, init_tracing, set_panic_hook, shutdown_node, shutdown_nodes, spawn_nodes, unique_test_root, wait_for_http_ready, wait_for_leader};
+use example_test_utils::{allocate_node_addrs, client_for, get_addr, init_tracing, set_panic_hook, shutdown_node, shutdown_nodes, spawn_nodes_with_policy, unique_test_root, wait_for_http_ready, wait_for_leader};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_cluster_follower_replacement() -> anyhow::Result<()> {
@@ -17,7 +17,7 @@ async fn test_cluster_follower_replacement() -> anyhow::Result<()> {
     let root = unique_test_root("test_cluster_follower_replacement");
 
     let mut node_addrs: BTreeMap<u64, String> = allocate_node_addrs([1, 2, 3]);
-    let handles = spawn_nodes(&root, &node_addrs).await;
+    let handles = spawn_nodes_with_policy(&root, &node_addrs, Some(40)).await;
     wait_for_http_ready(&node_addrs, Duration::from_secs(5)).await?;
 
     let mut handle_map: BTreeMap<u64, tokio::task::JoinHandle<()>> = node_addrs.keys().cloned().zip(handles.into_iter()).collect();
@@ -59,7 +59,7 @@ async fn test_cluster_follower_replacement() -> anyhow::Result<()> {
     let node_root_str = node_root.to_string_lossy().to_string();
     let addr_for_task = new_addr.clone();
     let handle4 = tokio::spawn(async move {
-        if let Err(err) = start_app_node(4, &node_root_str, addr_for_task).await {
+        if let Err(err) = start_app_node(4, &node_root_str, addr_for_task, Some(40)).await {
             panic!("node 4 failed: {err:?}");
         }
     });

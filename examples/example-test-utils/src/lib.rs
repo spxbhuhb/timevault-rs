@@ -91,14 +91,14 @@ pub fn get_addr(node_addrs: &BTreeMap<u64, String>, node_id: u64) -> anyhow::Res
 }
 
 /// Spawn one async task per node that runs `start_example_raft_node`.
-pub async fn spawn_nodes(root: &PathBuf, node_addrs: &BTreeMap<u64, String>) -> Vec<JoinHandle<()>> {
+pub async fn spawn_nodes_with_policy(root: &PathBuf, node_addrs: &BTreeMap<u64, String>, logs_since_last: Option<u64>) -> Vec<JoinHandle<()>> {
     let mut handles = Vec::with_capacity(node_addrs.len());
     for (&node_id, addr) in node_addrs {
         let addr = addr.clone();
         let node_root = root.join(format!("node-{node_id}"));
         let node_root = node_root.to_string_lossy().to_string();
         handles.push(tokio::spawn(async move {
-            if let Err(err) = start_app_node(node_id, &node_root, addr).await {
+            if let Err(err) = start_app_node(node_id, &node_root, addr, logs_since_last).await {
                 panic!("node {node_id} failed: {err:?}");
             }
         }));

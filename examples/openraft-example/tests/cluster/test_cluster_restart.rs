@@ -7,7 +7,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use example_test_utils::{
-    allocate_node_addrs, client_for, get_addr, init_tracing, set_panic_hook, shutdown_nodes, spawn_nodes, unique_test_root, wait_for_http_ready, wait_for_leader, wait_for_snapshot,
+    allocate_node_addrs, client_for, get_addr, init_tracing, set_panic_hook, shutdown_nodes, spawn_nodes_with_policy, unique_test_root, wait_for_http_ready, wait_for_leader, wait_for_snapshot,
 };
 
 // wait_for_leader and wait_for_snapshot moved to example-test-utils
@@ -22,7 +22,7 @@ async fn test_cluster_restart() -> anyhow::Result<()> {
     let root = unique_test_root("test_cluster_restart");
 
     let node_addrs = allocate_node_addrs([1, 2, 3]);
-    let handles = spawn_nodes(&root, &node_addrs).await;
+    let handles = spawn_nodes_with_policy(&root, &node_addrs, Some(40)).await;
     wait_for_http_ready(&node_addrs, Duration::from_secs(5)).await?;
 
     let client = client_for(&node_addrs, 1)?;
@@ -112,7 +112,7 @@ async fn test_cluster_restart() -> anyhow::Result<()> {
     shutdown_nodes(&node_addrs, handles).await?;
 
     // --- Restart the cluster with the same root and same ports
-    let handles2 = spawn_nodes(&root, &node_addrs).await;
+    let handles2 = spawn_nodes_with_policy(&root, &node_addrs, Some(40)).await;
     wait_for_http_ready(&node_addrs, Duration::from_secs(5)).await?;
 
     let client = client_for(&node_addrs, 1)?;

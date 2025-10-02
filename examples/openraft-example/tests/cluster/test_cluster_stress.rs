@@ -1,3 +1,5 @@
+#![cfg(feature = "long-running-test")]
+
 use maplit::btreeset;
 use openraft_example::domain::{DeviceStatus, AppEvent};
 use std::collections::HashMap;
@@ -6,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 use example_test_utils::{
-    allocate_node_addrs, client_for, get_addr, init_tracing, set_panic_hook, shutdown_nodes, spawn_nodes, unique_test_root, wait_for_http_ready, wait_for_leader, wait_for_snapshot,
+    allocate_node_addrs, client_for, get_addr, init_tracing, set_panic_hook, shutdown_nodes, spawn_nodes_with_policy, unique_test_root, wait_for_http_ready, wait_for_leader, wait_for_snapshot,
 };
 
 // wait_for_leader and wait_for_snapshot moved to example-test-utils
@@ -18,10 +20,12 @@ async fn test_cluster_stress() -> anyhow::Result<()> {
     set_panic_hook();
     init_tracing();
 
+    // Configure snapshot every 10_000 logs via startup policy
+
     let root = unique_test_root("test_cluster_stress");
 
     let node_addrs = allocate_node_addrs([1, 2, 3]);
-    let handles = spawn_nodes(&root, &node_addrs).await;
+    let handles = spawn_nodes_with_policy(&root, &node_addrs, Some(10_000)).await;
     wait_for_http_ready(&node_addrs, Duration::from_secs(5)).await?;
 
     let client = client_for(&node_addrs, 1)?;
@@ -37,8 +41,8 @@ async fn test_cluster_stress() -> anyhow::Result<()> {
     let partition_id = Uuid::now_v7();
     let device_ids: Vec<Uuid> = (0..128).map(|_| Uuid::now_v7()).collect();
     let mut expected_statuses: HashMap<Uuid, DeviceStatus> = HashMap::new();
-    let total_events = 100;
-    let snapshot_min_index = 40;
+    let total_events = 100_000;
+    let snapshot_min_index = 10_000;
 
     for idx in 0..total_events {
         let device = device_ids[idx as usize % device_ids.len()];
@@ -72,7 +76,7 @@ async fn test_cluster_stress() -> anyhow::Result<()> {
         client.write(&event).await?;
     }
 
-    let snapshot_log = wait_for_snapshot(&client, snapshot_min_index, Duration::from_secs(60)).await?;
+    let snapshot_log = wait_for_snapshot(&client, snapshot_min_index, Duration::from_secs(600)).await?;
     assert!(snapshot_log.index >= snapshot_min_index);
 
     let statuses = client.read().await?;

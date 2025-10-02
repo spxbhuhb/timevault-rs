@@ -26,5 +26,5 @@ async fn main() -> anyhow::Result<()> {
     // Parse the parameters passed by arguments.
     let options = Opt::parse();
 
-    start_app_node(options.id, "./var", options.http_addr).await
+    start_app_node(options.id, "./var", options.http_addr, None).await
 }

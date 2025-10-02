@@ -3,6 +3,9 @@ name = "openraft-example"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+long-running-test = []
+
 [dependencies]
 timevault = { path = "../../timevault" }
 openraft = { version = "0.9.21", features = ["serde","storage-v2"] }
