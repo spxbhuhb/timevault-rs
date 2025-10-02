@@ -9,7 +9,6 @@ use uuid::Uuid;
 
 use example_test_utils::{allocate_node_addrs, client_for, get_addr, init_tracing, set_panic_hook, shutdown_node, shutdown_nodes, spawn_nodes, unique_test_root, wait_for_http_ready, wait_for_leader};
 
-#[ignore] // not working yet
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_cluster_follower_replacement() -> anyhow::Result<()> {
     set_panic_hook();
@@ -95,23 +94,4 @@ async fn test_cluster_follower_replacement() -> anyhow::Result<()> {
     shutdown_nodes(&node_addrs, handle_map.into_values().collect()).await?;
 
     Ok(())
-}
-
-trait EventExt {
-    fn device_id(&self) -> Uuid;
-    fn event_id(&self) -> Uuid;
-}
-
-impl EventExt for ExampleEvent {
-    fn device_id(&self) -> Uuid {
-        match self {
-            ExampleEvent::DeviceOnline { device_id, .. } | ExampleEvent::DeviceOffline { device_id, .. } => *device_id,
-        }
-    }
-
-    fn event_id(&self) -> Uuid {
-        match self {
-            ExampleEvent::DeviceOnline { event_id, .. } | ExampleEvent::DeviceOffline { event_id, .. } => *event_id,
-        }
-    }
 }
