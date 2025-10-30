@@ -140,6 +140,7 @@ where
 }
 
 pub struct AppSnapshotBuilder {
+    store_root: std::path::PathBuf,
     store_snapshot: StoreSnapshot,
     devices: SharedDeviceState,
     last_applied_log: Option<LogId<TvrNodeId>>,
@@ -166,6 +167,16 @@ impl RaftSnapshotBuilder<AppConfig> for AppSnapshotBuilder {
             store: Some(self.store_snapshot.clone()),
         };
         let data = serde_json::to_vec(&snapshot_state).map_err(|e| storage_error(openraft::ErrorSubject::Store, openraft::ErrorVerb::Write, e))?;
+
+        // Persist the snapshot immediately after building to prevent state inconsistency
+        // if the node crashes after log purge but before snapshot persistence
+        let stored_snapshot = StoredSnapshot {
+            meta: meta.clone(),
+            data: data.clone(),
+        };
+        let state_file_path = self.store_root.join("raft_state.json");
+        atomic_write_json(state_file_path, &stored_snapshot)
+            .map_err(|e| storage_error(openraft::ErrorSubject::Store, openraft::ErrorVerb::Write, e))?;
 
         Ok(Snapshot { meta, snapshot: Box::new(std::io::Cursor::new(data)) })
     }
@@ -221,6 +232,7 @@ impl RaftStateMachine<AppConfig> for AppStateMachine {
             .map_err(|e| storage_error(openraft::ErrorSubject::Store, openraft::ErrorVerb::Read, e))
             .expect("build store snapshot");
         AppSnapshotBuilder {
+            store_root: self.store.root_path().to_path_buf(),
             store_snapshot,
             devices: self.devices.clone(),
             last_applied_log: self.data.last_applied_log_id,

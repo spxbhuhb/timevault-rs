@@ -50,6 +50,12 @@ struct Cluster { nodes: HashMap<u64, ProcNode> }
 async fn main() -> Result<()> {
     let opt = Opt::parse();
     let run_root = PathBuf::from(&opt.run_root);
+
+    // Clean up any stale data from previous runs to avoid inconsistent state
+    if run_root.exists() {
+        eprintln!("[chaos] cleaning up stale data directory: {}", run_root.display());
+        std::fs::remove_dir_all(&run_root)?;
+    }
     std::fs::create_dir_all(&run_root)?;
 
     let app_bin = resolve_app_bin(opt.app_bin.clone())?;
@@ -136,6 +142,7 @@ async fn main() -> Result<()> {
     // Event write loop
     let mut ts = now_ms();
     let mut writes = 0u64;
+    let mut failed_writes = 0u64;
     let start = Instant::now();
     while writes < opt.events {
         let device = devices[rng.gen_range(0..devices.len())];
@@ -144,16 +151,32 @@ async fn main() -> Result<()> {
         let is_online = rng.r#gen::<bool>();
         let event_id = Uuid::now_v7();
         let event = if is_online { AppEvent::DeviceOnline { event_id, device_id: device, timestamp: ts as i64, partition_id: part } } else { AppEvent::DeviceOffline { event_id, device_id: device, timestamp: ts as i64, partition_id: part } };
-        if client.write(&event).await.is_ok() {
-            let mut map = expected.lock();
-            map.insert(device, DeviceStatus { device_id: device, is_online, last_event_id: event_id, last_timestamp: ts as i64 });
-            writes += 1;
-            if writes % 1000 == 0 { eprintln!("[chaos] progress: {} writes", writes); }
+
+        // Retry failed writes until successful
+        loop {
+            match client.write(&event).await {
+                Ok(_) => {
+                    let mut map = expected.lock();
+                    map.insert(device, DeviceStatus { device_id: device, is_online, last_event_id: event_id, last_timestamp: ts as i64 });
+                    writes += 1;
+                    if writes % 1000 == 0 { eprintln!("[chaos] progress: {} writes (failed: {})", writes, failed_writes); }
+                    break;
+                }
+                Err(e) => {
+                    failed_writes += 1;
+                    if failed_writes % 100 == 0 {
+                        eprintln!("[chaos] write failed (total failures: {}): {:?}", failed_writes, e);
+                    }
+                    // Short delay before retry to avoid tight loop
+                    sleep(Duration::from_millis(50)).await;
+                }
+            }
         }
+
         if let Some(rps) = opt.rate_per_sec { if rps > 0 { sleep(Duration::from_millis((1000 / rps).max(1))).await; } }
         if writes % 2000 == 0 { eprintln!("[chaos] checkpoint verify at {}", writes); verify_state(&client, &expected).await?; }
     }
-    println!("Wrote {} events in {:?}", writes, start.elapsed());
+    println!("Wrote {} events in {:?} (total failures: {}, failure rate: {:.2}%)", writes, start.elapsed(), failed_writes, (failed_writes as f64 / (writes + failed_writes) as f64) * 100.0);
 
     // Final verify
     verify_state(&client, &expected).await?;
