@@ -11,6 +11,7 @@ use openraft_example::client::AppClient;
 use openraft_example::domain::{AppEvent, DeviceStatus};
 use parking_lot::Mutex;
 use rand::prelude::*;
+use timevault::store::partition::PartitionHandle;
 use tokio::process::{Child, Command};
 use tokio::time::{sleep, Instant};
 use uuid::Uuid;
@@ -87,6 +88,7 @@ async fn main() -> Result<()> {
     let partitions: Vec<Uuid> = (0..opt.partitions).map(|_| Uuid::now_v7()).collect();
     let devices: Vec<Uuid> = (0..opt.devices).map(|_| Uuid::now_v7()).collect();
     let expected = std::sync::Arc::new(Mutex::new(HashMap::<Uuid, DeviceStatus>::new()));
+    let written_events = std::sync::Arc::new(Mutex::new(HashMap::<Uuid, Vec<AppEvent>>::new()));
 
     // Give the cluster a brief warm-up before chaos
     sleep(Duration::from_millis(1500)).await;
@@ -158,6 +160,11 @@ async fn main() -> Result<()> {
                 Ok(_) => {
                     let mut map = expected.lock();
                     map.insert(device, DeviceStatus { device_id: device, is_online, last_event_id: event_id, last_timestamp: ts as i64 });
+
+                    // Track written events by partition
+                    let mut events_map = written_events.lock();
+                    events_map.entry(part).or_insert_with(Vec::new).push(event.clone());
+
                     writes += 1;
                     if writes % 1000 == 0 { eprintln!("[chaos] progress: {} writes (failed: {})", writes, failed_writes); }
                     break;
@@ -174,13 +181,49 @@ async fn main() -> Result<()> {
         }
 
         if let Some(rps) = opt.rate_per_sec { if rps > 0 { sleep(Duration::from_millis((1000 / rps).max(1))).await; } }
-        if writes % 2000 == 0 { eprintln!("[chaos] checkpoint verify at {}", writes); verify_state(&client, &expected).await?; }
+        if writes % 2000 == 0 {
+            eprintln!("[chaos] checkpoint verify at {}", writes);
+            // Wait for cluster to catch up: ensure all committed logs are applied
+            for attempt in 0..50 {
+                if let Ok(m) = client.metrics().await {
+                    let applied_index = m.last_applied.map(|l| l.index);
+                    if applied_index == m.last_log_index {
+                        eprintln!("[chaos] cluster caught up: last_applied={:?}", applied_index);
+                        break;
+                    }
+                    if attempt % 10 == 0 {
+                        eprintln!("[chaos] waiting for cluster: last_applied={:?} last_log_index={:?}", applied_index, m.last_log_index);
+                    }
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+            verify_state(&client, &expected).await?;
+        }
     }
     println!("Wrote {} events in {:?} (total failures: {}, failure rate: {:.2}%)", writes, start.elapsed(), failed_writes, (failed_writes as f64 / (writes + failed_writes) as f64) * 100.0);
 
-    // Final verify
+    // Save partition files to disk
+    eprintln!("[chaos] saving partition files to disk");
+    save_partition_files(&run_root, &written_events).await?;
+
+    // Final verify - wait for cluster to catch up first
+    eprintln!("[chaos] final verification: waiting for cluster to catch up");
+    for attempt in 0..100 {
+        if let Ok(m) = client.metrics().await {
+            let applied_index = m.last_applied.map(|l| l.index);
+            if applied_index == m.last_log_index {
+                eprintln!("[chaos] cluster caught up: last_applied={:?}", applied_index);
+                break;
+            }
+            if attempt % 20 == 0 {
+                eprintln!("[chaos] waiting for cluster: last_applied={:?} last_log_index={:?}", applied_index, m.last_log_index);
+            }
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
     verify_state(&client, &expected).await?;
     verify_partitions(&nodes_meta[0].root, &expected).await?;
+    verify_partition_files(&run_root, &nodes_meta, &written_events).await?;
 
     chaos.abort();
     let mut cl = cluster.lock();
@@ -337,6 +380,121 @@ async fn verify_partitions(node_root: &Path, _expected: &std::sync::Arc<Mutex<Ha
         if let Some(_e) = rd.next() { found_any = true; }
     }
     anyhow::ensure!(found_any, "no partitions present under {}", parts_root.display());
+    Ok(())
+}
+
+async fn save_partition_files(run_root: &Path, written_events: &std::sync::Arc<Mutex<HashMap<Uuid, Vec<AppEvent>>>>) -> Result<()> {
+    let events_map = written_events.lock();
+    for (partition_id, events) in events_map.iter() {
+        let file_path = run_root.join(format!("partition-{}.json", partition_id));
+        let json = serde_json::to_string_pretty(events)
+            .context("serialize partition events")?;
+        std::fs::write(&file_path, json)
+            .with_context(|| format!("write partition file {}", file_path.display()))?;
+        eprintln!("[chaos] saved {} events to {}", events.len(), file_path.display());
+    }
+    Ok(())
+}
+
+async fn verify_partition_files(_run_root: &Path, nodes: &[Node], written_events: &std::sync::Arc<Mutex<HashMap<Uuid, Vec<AppEvent>>>>) -> Result<()> {
+    eprintln!("[chaos] verifying partition files across all nodes");
+    let expected_events = written_events.lock();
+
+    for (partition_id, expected) in expected_events.iter() {
+        eprintln!("[chaos] verifying partition {} ({} expected events)", partition_id, expected.len());
+
+        // Check each node's partition directory
+        for node in nodes {
+            // Open the partition using timevault API
+            let partition_handle = PartitionHandle::open(node.root.clone(), *partition_id)
+                .with_context(|| format!("open partition {} on node {}", partition_id, node.id))?;
+
+            // Read all events from partition (0 to u64::MAX)
+            let raw_bytes = partition_handle.read_range(0, u64::MAX)
+                .with_context(|| format!("read partition {} on node {}", partition_id, node.id))?;
+
+            // Parse JSONL format: each line is an AppEvent JSON object
+            let content = String::from_utf8(raw_bytes)
+                .with_context(|| format!("parse UTF-8 from partition {}", partition_id))?;
+
+            let mut node_events = Vec::new();
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+
+                // Parse the JSONL line directly as AppEvent
+                let event: AppEvent = serde_json::from_str(line)
+                    .with_context(|| format!("parse AppEvent from line: {}", line))?;
+
+                node_events.push(event);
+            }
+
+            // Verify count matches
+            if node_events.len() != expected.len() {
+                anyhow::bail!(
+                    "partition {} on node {} has {} events, expected {}",
+                    partition_id,
+                    node.id,
+                    node_events.len(),
+                    expected.len()
+                );
+            }
+
+            // Build sets of event IDs for comparison
+            let expected_event_ids: std::collections::HashSet<Uuid> =
+                expected.iter().map(|e| e.event_id()).collect();
+            let node_event_ids: std::collections::HashSet<Uuid> =
+                node_events.iter().map(|e| e.event_id()).collect();
+
+            // Check for missing events
+            let missing: Vec<&Uuid> = expected_event_ids.difference(&node_event_ids).collect();
+            if !missing.is_empty() {
+                anyhow::bail!(
+                    "partition {} on node {} is missing {} events: {:?}",
+                    partition_id,
+                    node.id,
+                    missing.len(),
+                    &missing[..missing.len().min(5)]
+                );
+            }
+
+            // Check for extra/duplicate events
+            let extra: Vec<&Uuid> = node_event_ids.difference(&expected_event_ids).collect();
+            if !extra.is_empty() {
+                anyhow::bail!(
+                    "partition {} on node {} has {} extra/duplicate events: {:?}",
+                    partition_id,
+                    node.id,
+                    extra.len(),
+                    &extra[..extra.len().min(5)]
+                );
+            }
+
+            // Check for duplicates within node events
+            let mut seen = std::collections::HashSet::new();
+            for event in &node_events {
+                if !seen.insert(event.event_id()) {
+                    anyhow::bail!(
+                        "partition {} on node {} has duplicate event_id: {}",
+                        partition_id,
+                        node.id,
+                        event.event_id()
+                    );
+                }
+            }
+
+            eprintln!(
+                "[chaos] ✓ partition {} on node {} verified ({} events, no duplicates, no missing)",
+                partition_id,
+                node.id,
+                node_events.len()
+            );
+        }
+    }
+
+    eprintln!("[chaos] ✓ all partition files verified successfully across all nodes");
     Ok(())
 }
 
