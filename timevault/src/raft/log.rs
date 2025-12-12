@@ -185,7 +185,9 @@ where
     fn drop(&mut self) {
         let _ = self.tx.send(Op::Shutdown);
         if let Some(h) = self.thread_handle.take() {
-            let _ = h.join();
+            if let Err(e) = h.join() {
+                std::panic::resume_unwind(e);
+            }
         }
     }
 }
@@ -232,15 +234,11 @@ where
     D: serde::Serialize + DeserializeOwned + openraft::AppData,
     R: openraft::AppDataResponse,
 {
-    let plugin = match crate::store::plugins::resolve_plugin("jsonl") {
-        Ok(p) => p,
-        Err(_) => return Vec::new(),
-    };
+    let plugin = crate::store::plugins::resolve_plugin("jsonl")
+        .expect("jsonl plugin must be available");
     let mut cur = Cursor::new(buf);
-    let mut sc = match plugin.scanner(&mut cur) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
+    let mut sc = plugin.scanner(&mut cur)
+        .expect("failed to create scanner for raft log buffer");
 
     let mut out = Vec::new();
     while let Ok(Some(meta)) = sc.next() {
@@ -248,27 +246,44 @@ where
         let start = meta.offset as usize;
         let end = start + meta.len as usize;
         if end > buf.len() {
-            break;
+            panic!(
+                "raft log corruption in partition {}: record at offset {} with len {} exceeds buffer size {}",
+                part.short_id(), start, meta.len, buf.len()
+            );
         }
         let line = &buf[start..end];
-        if let Ok(rec) = serde_json::from_slice::<JsonlRecord>(line) {
-            if !range.contains(&rec.log_id.index) {
-                continue;
+        let rec = match serde_json::from_slice::<JsonlRecord>(line) {
+            Ok(r) => r,
+            Err(e) => {
+                let preview = String::from_utf8_lossy(&line[..line.len().min(200)]);
+                panic!(
+                    "raft log corruption in partition {}: failed to parse JSON record at offset {}: {}. Preview: {}",
+                    part.short_id(), start, e, preview
+                );
             }
-            let payload = match rec.kind.as_str() {
-                "Blank" => EntryPayload::Blank,
-                "Membership" => match serde_json::from_value(rec.payload) {
-                    Ok(m) => EntryPayload::Membership(m),
-                    Err(_) => EntryPayload::Blank,
-                },
-                _ => match serde_json::from_value(rec.payload) {
-                    Ok(v) => EntryPayload::Normal(v),
-                    Err(_) => EntryPayload::Blank,
-                },
-            };
-            trace!("decode_entries {}: {} {:?}", part.short_id(), rec.log_id, &payload);
-            out.push(Entry { log_id: rec.log_id, payload });
+        };
+        if !range.contains(&rec.log_id.index) {
+            continue;
         }
+        let payload = match rec.kind.as_str() {
+            "Blank" => EntryPayload::Blank,
+            "Membership" => match serde_json::from_value(rec.payload.clone()) {
+                Ok(m) => EntryPayload::Membership(m),
+                Err(e) => panic!(
+                    "raft log corruption in partition {}: failed to parse Membership payload at log_id {}: {}",
+                    part.short_id(), rec.log_id, e
+                ),
+            },
+            _ => match serde_json::from_value(rec.payload.clone()) {
+                Ok(v) => EntryPayload::Normal(v),
+                Err(e) => panic!(
+                    "raft log corruption in partition {}: failed to parse Normal payload at log_id {}: {}",
+                    part.short_id(), rec.log_id, e
+                ),
+            },
+        };
+        trace!("decode_entries {}: {} {:?}", part.short_id(), rec.log_id, &payload);
+        out.push(Entry { log_id: rec.log_id, payload });
     }
     out
 }
@@ -370,7 +385,7 @@ where
     R: openraft::AppDataResponse,
 {
     async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + OptionalSend>(&mut self, range: RB) -> Result<Vec<Entry<TvrConfig<D, R>>>, StorageError<TvrNodeId>> {
-        self.get_log_reader().await.try_get_log_entries(range).await // FIXME I'm not sure about this line, just added await until it started to work
+        self.get_log_reader().await.try_get_log_entries(range).await
     }
 }
 

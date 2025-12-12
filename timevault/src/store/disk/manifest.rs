@@ -66,9 +66,8 @@ pub fn close_manifest_line(path: &std::path::Path, rt: &crate::store::partition:
         f.sync_all()?;
     }
     std::fs::rename(&tmp, path)?;
-    // Best-effort fsync dir
     if let Some(dir) = path.parent() {
-        let _ = crate::store::fsync::fsync_dir(dir);
+        crate::store::fsync::fsync_dir(dir).expect("fsync manifest dir failed");
     }
     Ok(())
 }
@@ -88,7 +87,7 @@ pub fn rewrite_manifest_atomic(path: &std::path::Path, lines: &[ManifestLine]) -
     }
     std::fs::rename(&tmp, path)?;
     if let Some(dir) = path.parent() {
-        let _ = crate::store::fsync::fsync_dir(dir);
+        crate::store::fsync::fsync_dir(dir).expect("fsync manifest dir failed");
     }
     Ok(())
 }

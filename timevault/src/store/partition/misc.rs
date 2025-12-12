@@ -45,7 +45,7 @@ pub(crate) fn delete_chunk_files(chunks_dir: &std::path::Path, ids: &[u64]) {
         let _ = fs::remove_file(cp);
         let _ = fs::remove_file(ip);
     }
-    let _ = crate::store::fsync::fsync_dir(chunks_dir);
+    crate::store::fsync::fsync_dir(chunks_dir).expect("fsync chunks dir after delete failed");
 }
 
 pub(crate) fn refresh_runtime(h: &PartitionHandle, meta: &crate::store::disk::metadata::MetadataJson) -> Result<()> {
@@ -66,6 +66,6 @@ pub(crate) fn truncate_file(path: &std::path::Path, new_len: u64) -> Result<()> 
     use std::fs::OpenOptions;
     let f = OpenOptions::new().write(true).open(path)?;
     f.set_len(new_len)?;
-    let _ = f.sync_all();
+    f.sync_all().expect("fsync after truncate failed");
     Ok(())
 }

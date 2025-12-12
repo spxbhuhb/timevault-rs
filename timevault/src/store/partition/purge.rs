@@ -146,7 +146,7 @@ fn purge_chunk_from_start(chunks_dir: &std::path::Path, chunk_id: u64, cutoff_ke
             // Truncate file to 0
             let cf = OpenOptions::new().write(true).open(&chunk_path)?;
             cf.set_len(0)?;
-            let _ = cf.sync_all();
+            cf.sync_all().expect("fsync chunk file after truncate failed");
             return Ok((false, None, was_closed_max));
         }
     };
@@ -234,10 +234,10 @@ fn rewrite_file_from_offset(path: &std::path::Path, start_off: u64) -> Result<u6
         total += n as u64;
     }
     dst.flush()?;
-    let _ = dst.sync_all();
+    dst.sync_all().expect("fsync chunk tmp file failed");
     std::fs::rename(&tmp, path)?;
     if let Some(dir) = path.parent() {
-        let _ = crate::store::fsync::fsync_dir(dir);
+        crate::store::fsync::fsync_dir(dir).expect("fsync chunks dir failed");
     }
     // Ensure new file size is set (rename preserves size)
     Ok(total)
