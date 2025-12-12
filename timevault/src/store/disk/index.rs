@@ -34,9 +34,9 @@ pub fn create_empty_index_file(rt: &crate::store::partition::PartitionRuntime, c
     let ip = crate::store::paths::index_file(&chunks_dir, chunk_id);
     let mut f = OpenOptions::new().create(true).write(true).open(&ip)?;
     f.flush()?;
-    let _ = f.sync_all();
+    f.sync_all().expect("fsync index file failed");
     if let Some(dir) = ip.parent() {
-        let _ = crate::store::fsync::fsync_dir(dir);
+        crate::store::fsync::fsync_dir(dir).expect("fsync chunks dir failed");
     }
     Ok(())
 }
@@ -52,11 +52,11 @@ pub fn rewrite_index_atomic(path: &std::path::Path, lines: &[IndexLine]) -> Resu
             f.write_all(&buf)?;
         }
         f.flush()?;
-        let _ = f.sync_all();
+        f.sync_all().expect("fsync index tmp file failed");
     }
     std::fs::rename(&tmp, path)?;
     if let Some(dir) = path.parent() {
-        let _ = crate::store::fsync::fsync_dir(dir);
+        crate::store::fsync::fsync_dir(dir).expect("fsync index dir failed");
     }
     Ok(())
 }

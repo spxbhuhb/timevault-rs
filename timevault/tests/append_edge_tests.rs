@@ -41,7 +41,7 @@ fn read_manifest_lines(p: &std::path::Path) -> Vec<ManifestLine> {
 }
 
 #[test]
-fn append_out_of_order_is_ignored() {
+fn append_out_of_order_returns_error() {
     let td = TempDir::new().unwrap();
     let root = td.path().to_path_buf();
     let id = Uuid::now_v7();
@@ -56,11 +56,15 @@ fn append_out_of_order_is_ignored() {
     let chunk_path = paths::chunk_file(&paths::chunks_dir(&part_dir), chunk_id);
     let before = std::fs::read(&chunk_path).unwrap();
 
-    let ack = h.append(999, &enc(999, serde_json::json!("b"))).unwrap();
-    assert_eq!(ack.offset as usize, before.len());
+    // Out-of-order append should return an error
+    let result = h.append(999, &enc(999, serde_json::json!("b")));
+    assert!(result.is_err(), "out-of-order append should return an error");
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("out of order"), "error should mention out of order: {}", err);
 
+    // Data should be unchanged
     let after = std::fs::read(&chunk_path).unwrap();
-    assert_eq!(before, after, "out-of-order append should be ignored");
+    assert_eq!(before, after, "out-of-order append should not modify data");
 }
 
 #[test]

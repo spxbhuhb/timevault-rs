@@ -550,7 +550,7 @@ fn finalize_download(tmp_path: &Path, final_path: &Path) -> Result<()> {
     }
     fs::rename(tmp_path, final_path)?;
     if let Some(dir) = final_path.parent() {
-        let _ = crate::store::fsync::fsync_dir(dir);
+        crate::store::fsync::fsync_dir(dir).expect("fsync dir after download failed");
     }
     Ok(())
 }
